@@ -3,11 +3,32 @@
 import logging
 import numpy as np
 
-from dipy.data import get_sphere
 from dipy.reconst.shm import sh_to_sf, sf_to_sh
 
 
-def compute_avg_fodf(data, sphere, sh_order=8, input_sh_basis='descoteaux07',
+def get_hemisphere_from_direction(direction, sphere):
+    """
+     DESCRIPTION
+
+    Parameters
+    ----------
+    PARAM1: PARAM DESCRIPTION
+
+    Returns
+    -------
+    RET1: RETURN VALUE DESCRIPTION
+
+    """
+    if np.nonzero(direction) == 0:
+        return np.arange(sphere.vertices.size)
+
+    direction.reshape((3,1))
+    dotprod = np.dot(sphere.vertices, direction)
+
+    return np.nonzero(dotprod >= 0)[0]
+
+
+def compute_avg_fodf(data, affine, sphere, mask = None, sh_order=8, input_sh_basis='descoteaux07',
                      output_sh_basis='descoteaux07_full'):
     """
      DESCRIPTION
@@ -21,20 +42,54 @@ def compute_avg_fodf(data, sphere, sh_order=8, input_sh_basis='descoteaux07',
     RET1: RETURN VALUE DESCRIPTION
 
     """
+    # TODO: safety checks
 
-    # Safety checks
+    # Table of correspondance between a segment and its invert on the sphere
+    segments_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
+
+    # Out of memory on big data sets
+    # Besoin de la tranche precedente et suivante
+    sf = sh_to_sf(data, sphere, sh_order=sh_order, basis_type=input_sh_basis)
 
     # Computing average of fODFs
-    # Lets first consider the case where we only consider  
-    # the 8 immediate neighbors in the average
-    padding = np.full(len(data.shape), 2)
+    half_width = 1
+    padding = np.full(len(sf.shape), 2 * half_width)
     padding[-1] = 0
-    augm_datashape = tuple(np.array(data.shape) + padding)
-    augm_data = np.zeros(augm_datashape)
-    augm_data[1:-1,1:-1,1:-1] = data
-    avg_data = augm_data
+    augm_dim = tuple(np.array(sf.shape) + padding)
+    padded_sf = np.zeros(augm_dim)
 
-    # add translated data to avg data for all neighbors
+    for x in range(-half_width, half_width + 1):
+        for y in range(-half_width, half_width + 1):
+            for z in range(-half_width, half_width + 1):
+                # TODO: learn how to use affine information
+                direction = np.matmul(affine[:3,:3], np.array([x, y, z]))
+                hemisphere = get_hemisphere_from_direction(direction, sphere)
+                opposite_hemisphere = segments_table[hemisphere]
+                padded_sf[\
+                    half_width + x:augm_dim[0] - half_width + x,\
+                    half_width + y:augm_dim[1] - half_width + y,\
+                    half_width + z:augm_dim[2] - half_width + z,\
+                    hemisphere
+                ] = padded_sf[\
+                        half_width + x:augm_dim[0] - half_width + x,\
+                        half_width + y:augm_dim[1] - half_width + y,\
+                        half_width + z:augm_dim[2] - half_width + z,\
+                        hemisphere
+                    ] + sf[:, :, :, opposite_hemisphere]
 
-    # crop avg_data and return
-    return 
+    padded_sf = padded_sf / 27.0
+    sf = padded_sf[half_width:-half_width, half_width:-half_width, half_width:-half_width]
+
+    # convert back to sh using a full basis
+    sh_data = sf_to_sh(sf, sphere, sh_order=sh_order, basis_type=output_sh_basis)
+
+    if mask is not None:
+        bin_mask = mask > 0
+        # TODO: Replace for loops by more efficient alternative
+        for x in range(sh_data.shape[0]):
+            for y in range(sh_data.shape[1]):
+                for z in range(sh_data.shape[2]):
+                    if not bin_mask[x, y, z]:
+                        sh_data[x, y, z] = np.zeros_like(sh_data[x, y, z])
+
+    return sh_data

@@ -14,8 +14,7 @@ import numpy as np
 from dipy.data import get_sphere
 
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
-                             assert_outputs_exist, add_force_b0_arg,
-                             add_sh_basis_args)
+                             assert_outputs_exist, add_sh_basis_args)
 
 from scilpy.reconst.average_fodf import compute_avg_fodf
 
@@ -27,8 +26,7 @@ def _build_arg_parser():
     p.add_argument('input',
                    help='Path to the input fODF file (.nii or .nii.gz format)')
     
-    p.add_argument(
-        'output',
+    p.add_argument('output',
         help='Output filename for the averaged fiber ODF coefficients.')
 
     p.add_argument(
@@ -37,7 +35,12 @@ def _build_arg_parser():
 
     p.add_argument(
         '--sphere', default='symmetric724',
-        help='sphere used for the SH reprojection'
+        help='Sphere used for the SH reprojection'
+    )
+
+    p.add_argument(
+        '--mask', default=None,
+        help='Mask to use for computing the average fodf'
     )
 
     add_sh_basis_args(p)
@@ -58,15 +61,21 @@ def main():
     # Prepare data
     sphere = get_sphere(args.sphere)
     img = nib.nifti1.load(args.input)
-    data = img.get_fdata()
+    mask_data = None
+    if args.mask != None:
+        mask = nib.nifti1.load(args.mask)
+        mask_data = mask.get_fdata()
+
+    img_data = img.get_fdata()
+    affine = img.affine
 
     # Computing neighbors average of fODFs
-    avg_fodf = compute_avg_fodf(
-        data, sphere, sh_order=args.sh_order, input_sh_basis=args.sh_basis)
+    avg_fodf = compute_avg_fodf(img_data, affine, sphere, mask=mask_data,
+        sh_order=args.sh_order, input_sh_basis=args.sh_basis)
 
     # Saving results
-    # nib.save(nib.Nifti1Image(
-    #     reshape_peaks_for_visualization(peaks_csd), vol.affine), args.peaks)
+    img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
+    img.to_filename(args.output)
 
 
 if __name__ == "__main__":
