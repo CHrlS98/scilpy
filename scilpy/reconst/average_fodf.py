@@ -28,8 +28,19 @@ def get_hemisphere_from_direction(direction, sphere):
     return np.nonzero(dotprod >= 0)[0]
 
 
-def compute_avg_fodf(data, affine, sphere, mask = None, sh_order=8, input_sh_basis='descoteaux07',
-                     output_sh_basis='descoteaux07_full'):
+def compute_local_mean(data, sphere, antipods_table):
+    out_value = np.zeros_like(data[0, 0, 0])
+    for x in range(data.shape[0]):
+        for y in range(data.shape[1]):
+            for z in range(data.shape[2]):
+                direction = np.array([x-1, y-1, z-1])
+                hemisphere = get_hemisphere_from_direction(direction, sphere)
+                out_value[hemisphere] = out_value[hemisphere] + data[x, y, z, antipods_table[hemisphere]]
+    return out_value / (data.shape[0] * data.shape[1] * data.shape[2])
+
+
+def compute_avg_fodf(data, affine, sphere, mask = None, 
+                     sh_order=8, input_sh_basis='descoteaux07'):
     """
      DESCRIPTION
 
@@ -93,3 +104,34 @@ def compute_avg_fodf(data, affine, sphere, mask = None, sh_order=8, input_sh_bas
                         sh_data[x, y, z] = np.zeros_like(sh_data[x, y, z])
 
     return sh_data
+
+
+def compute_naive_avg_fodf(data, sphere, sh_order=8,
+                           input_sh_basis='descoteaux07'):
+    """
+     DESCRIPTION
+
+    Parameters
+    ----------
+    PARAM1: PARAM DESCRIPTION
+
+    Returns
+    -------
+    RET1: RETURN VALUE DESCRIPTION
+
+    """
+    # Table of correspondance between a segment and its invert on the sphere
+    antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
+    output_sh_basis = 'descoteaux07_full'
+
+    # naive implementation for ground truth
+    sf = np.array([sh_to_sf(slice_i, sphere, sh_order=sh_order, basis_type=input_sh_basis) for slice_i in data])
+    mean_sf = np.zeros_like(sf)
+    for x in range(1, data.shape[0] - 1):
+        for y in range(1, data.shape[1] - 1):
+            for z in range(1, data.shape[2] - 1):
+                mean_sf[x, y, z] = compute_local_mean(sf[x-1:x+2,y-1:y+2, z-1:z+2], sphere, antipods_table)
+
+    averaged_data = np.array([sf_to_sh(slice_i, sphere, sh_order=8, basis_type=output_sh_basis) for slice_i in mean_sf])
+
+    return averaged_data
