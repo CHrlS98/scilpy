@@ -8,16 +8,7 @@ from dipy.reconst.shm import sh_to_sf, sf_to_sh
 
 def get_hemisphere_from_direction(direction, sphere):
     """
-     DESCRIPTION
-
-    Parameters
-    ----------
-    PARAM1: PARAM DESCRIPTION
-
-    Returns
-    -------
-    RET1: RETURN VALUE DESCRIPTION
-
+    Get indices of vertices of sphere on the same hemisphere as 'direction'
     """
     if np.nonzero(direction) == 0:
         return np.arange(sphere.vertices.size)
@@ -43,83 +34,39 @@ def compute_local_mean(data, sphere, antipods_table):
 def compute_avg_fodf(data, affine, sphere, mask = None, 
                      sh_order=8, input_sh_basis='descoteaux07'):
     """
-     DESCRIPTION
-
-    Parameters
-    ----------
-    PARAM1: PARAM DESCRIPTION
-
-    Returns
-    -------
-    RET1: RETURN VALUE DESCRIPTION
-
+    Compute the average of fodf in data with its 26 neighbors.
     """
-    # TODO: safety checks
-
     # Table of correspondance between a segment and its invert on the sphere
-    segments_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
+    antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
 
-    # Out of memory on big data sets
-    # Besoin de la tranche precedente et suivante
-    sf = sh_to_sf(data, sphere, sh_order=sh_order, basis_type=input_sh_basis)
+    # Convert to spherical function
+    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data])
 
-    # Computing average of fODFs
-    half_width = 1
-    padding = np.full(len(sf.shape), 2 * half_width)
-    padding[-1] = 0
-    augm_dim = tuple(np.array(sf.shape) + padding)
-    padded_sf = np.zeros(augm_dim)
+    # Zero-initialize array for mean SF
+    mean_sf = np.zeros_like(sf)
+    dim = mean_sf.shape
 
-    for x in range(-half_width, half_width + 1):
-        for y in range(-half_width, half_width + 1):
-            for z in range(-half_width, half_width + 1):
-                # TODO: learn how to use affine information
-                direction = np.matmul(affine[:3,:3], np.array([x, y, z]))
+    # Zero pad sf data
+    pad_width = ((1, 1),(1, 1),(1, 1),(0, 0))
+    sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
+
+    for i in range(3):
+        for j in range(3):
+            for k in range(3):
+                direction = np.array([i-1, j-1, k-1])
                 hemisphere = get_hemisphere_from_direction(direction, sphere)
-                opposite_hemisphere = segments_table[hemisphere]
-                padded_sf[\
-                    half_width + x:augm_dim[0] - half_width + x,\
-                    half_width + y:augm_dim[1] - half_width + y,\
-                    half_width + z:augm_dim[2] - half_width + z,\
-                    hemisphere
-                ] = padded_sf[\
-                        half_width + x:augm_dim[0] - half_width + x,\
-                        half_width + y:augm_dim[1] - half_width + y,\
-                        half_width + z:augm_dim[2] - half_width + z,\
-                        hemisphere
-                    ] + sf[:, :, :, opposite_hemisphere]
+                mean_sf[..., hemisphere] += \
+                    sf[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
 
-    padded_sf = padded_sf / 27.0
-    sf = padded_sf[half_width:-half_width, half_width:-half_width, half_width:-half_width]
+    mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
 
-    # convert back to sh using a full basis
-    sh_data = sf_to_sh(sf, sphere, sh_order=sh_order, basis_type=output_sh_basis)
-
-    if mask is not None:
-        bin_mask = mask > 0
-        # TODO: Replace for loops by more efficient alternative
-        for x in range(sh_data.shape[0]):
-            for y in range(sh_data.shape[1]):
-                for z in range(sh_data.shape[2]):
-                    if not bin_mask[x, y, z]:
-                        sh_data[x, y, z] = np.zeros_like(sh_data[x, y, z])
-
-    return sh_data
+    return mean_sh
 
 
 def compute_naive_avg_fodf(data, sphere, sh_order=8,
                            input_sh_basis='descoteaux07'):
     """
-     DESCRIPTION
-
-    Parameters
-    ----------
-    PARAM1: PARAM DESCRIPTION
-
-    Returns
-    -------
-    RET1: RETURN VALUE DESCRIPTION
-
+    Naive implementation of neighbors average using for loops. Not optimized.
     """
     # Table of correspondance between a segment and its invert on the sphere
     antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
@@ -140,16 +87,8 @@ def compute_naive_avg_fodf(data, sphere, sh_order=8,
 
 def compute_diff_fodf(input_data, averaged_data, sh_order, symmetric_basis, full_sh_basis, sphere):
     """
-     DESCRIPTION
-
-    Parameters
-    ----------
-    PARAM1: PARAM DESCRIPTION
-
-    Returns
-    -------
-    RET1: RETURN VALUE DESCRIPTION
-
+    Compute the fodf resulting from the subtraction of the original 
+    symmetric signal to the averaged full signal
     """
     input_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, symmetric_basis) for slice_i in input_data])
     mean_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, full_sh_basis) for slice_i in averaged_data])
@@ -162,16 +101,8 @@ def compute_diff_fodf(input_data, averaged_data, sh_order, symmetric_basis, full
 
 def compute_error(input_data, averaged_data, sh_order, symmetric_basis, full_sh_basis, sphere):
     """
-     DESCRIPTION
-
-    Parameters
-    ----------
-    PARAM1: PARAM DESCRIPTION
-
-    Returns
-    -------
-    RET1: RETURN VALUE DESCRIPTION
-
+    Compute mean square error between signal recovered from our symmetric
+    basis and the signal recovered from a full SH basis
     """
     input_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, symmetric_basis) for slice_i in input_data])
     mean_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, full_sh_basis) for slice_i in averaged_data])
@@ -185,16 +116,8 @@ def compute_error(input_data, averaged_data, sh_order, symmetric_basis, full_sh_
 
 def compute_reconst_error(averaged_data, sh_order, symmetric_basis, full_sh_basis, sphere):
     """
-     DESCRIPTION
-
-    Parameters
-    ----------
-    PARAM1: PARAM DESCRIPTION
-
-    Returns
-    -------
-    RET1: RETURN VALUE DESCRIPTION
-
+    Compute the reconstruction error when using a symmetric basis to average the signal 
+    obtained from a full spherical harmonics basis
     """
     full_sf = np.array([sh_to_sf(i, sphere, sh_order, full_sh_basis) for i in averaged_data])
     sym_sh = np.array([sf_to_sh(i, sphere, sh_order, symmetric_basis) for i in full_sf])

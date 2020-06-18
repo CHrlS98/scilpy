@@ -31,7 +31,7 @@ def _build_arg_parser():
                    help='Path to the input fODF file (.nii or .nii.gz format)')
     
     p.add_argument('output',
-        help='Output filename (without extension).')
+        help='Output path (without extension).')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
@@ -65,7 +65,7 @@ def main():
 
     # Checking args
     assert_inputs_exist(parser, args.input)
-    assert_outputs_exist(parser, args, args.output)
+    assert_outputs_exist(parser, args, args.output, check_dir_exists=True)
 
     # Prepare data
     sphere = get_sphere(args.sphere)
@@ -82,26 +82,32 @@ def main():
     avg_fodf = None
     avg_img = None
     if args.naive:
+        logging.info('Computing average fodf (naive implementation)')
         avg_fodf = compute_naive_avg_fodf(img_data, sphere, args.sh_order,
                                           args.sh_basis)
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
     else:
+        logging.info('Computing average fodf (fast implementation)')
         avg_fodf = compute_avg_fodf(img_data, affine, sphere, mask_data,
                                     args.sh_order, args.sh_basis)
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
 
     # Computing difference between symmetric and asymmetric images
+    logging.info('Computing difference fodf between input and output')
     diff_fodf = compute_diff_fodf(img_data, avg_fodf, args.sh_order, args.sh_basis, 'descoteaux07_full', sphere)
     diff_img = nib.Nifti1Image(diff_fodf.astype(np.float32), affine)
 
-    # Computing mean-squared error
+    # Computing meansquared error
+    logging.info('Computing mean squared error')
     ms_error = compute_error(img_data, avg_fodf, args.sh_order, args.sh_basis, 'descoteaux07_full', sphere)
     ms_error_img = nib.Nifti1Image(ms_error.astype(np.float32), affine)
 
     # Computing reconstruction error
+    loggin.info('Computing reconstruction error')
     reconst_error = compute_reconst_error(avg_fodf, args.sh_order, args.sh_basis, 'descoteaux07_full', sphere)
     reconst_error_img = nib.Nifti1Image(reconst_error.astype(np.float32), affine)
 
+    logging.info('Saving outputs')
     avg_img.to_filename(args.output + '_fodf.nii.gz')
     diff_img.to_filename(args.output + '_diff.nii.gz')
     ms_error_img.to_filename(args.output + '_ms_error.nii.gz')
