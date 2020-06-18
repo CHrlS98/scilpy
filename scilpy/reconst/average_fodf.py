@@ -35,7 +35,8 @@ def compute_local_mean(data, sphere, antipods_table):
             for z in range(data.shape[2]):
                 direction = np.array([x-1, y-1, z-1])
                 hemisphere = get_hemisphere_from_direction(direction, sphere)
-                out_value[hemisphere] = out_value[hemisphere] + data[x, y, z, antipods_table[hemisphere]]
+                out_value[hemisphere] = out_value[hemisphere]\
+                    + data[x, y, z, antipods_table[hemisphere]]
     return out_value / (data.shape[0] * data.shape[1] * data.shape[2])
 
 
@@ -135,3 +136,71 @@ def compute_naive_avg_fodf(data, sphere, sh_order=8,
     averaged_data = np.array([sf_to_sh(slice_i, sphere, sh_order=8, basis_type=output_sh_basis) for slice_i in mean_sf])
 
     return averaged_data
+
+
+def compute_diff_fodf(input_data, averaged_data, sh_order, symmetric_basis, full_sh_basis, sphere):
+    """
+     DESCRIPTION
+
+    Parameters
+    ----------
+    PARAM1: PARAM DESCRIPTION
+
+    Returns
+    -------
+    RET1: RETURN VALUE DESCRIPTION
+
+    """
+    input_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, symmetric_basis) for slice_i in input_data])
+    mean_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, full_sh_basis) for slice_i in averaged_data])
+
+    resulting_sf = mean_sf - input_sf
+    output_sh = np.array([sf_to_sh(slice_i, sphere, sh_order, full_sh_basis) for slice_i in resulting_sf])
+
+    return output_sh
+
+
+def compute_error(input_data, averaged_data, sh_order, symmetric_basis, full_sh_basis, sphere):
+    """
+     DESCRIPTION
+
+    Parameters
+    ----------
+    PARAM1: PARAM DESCRIPTION
+
+    Returns
+    -------
+    RET1: RETURN VALUE DESCRIPTION
+
+    """
+    input_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, symmetric_basis) for slice_i in input_data])
+    mean_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, full_sh_basis) for slice_i in averaged_data])
+
+    input_sf_norm = np.linalg.norm(input_sf, axis=-1)
+    mean_sf_norm = np.linalg.norm(mean_sf, axis=-1)
+
+    error = np.sum((mean_sf - input_sf)**2, axis=-1)
+    return error / error.max()
+
+
+def compute_reconst_error(averaged_data, sh_order, symmetric_basis, full_sh_basis, sphere):
+    """
+     DESCRIPTION
+
+    Parameters
+    ----------
+    PARAM1: PARAM DESCRIPTION
+
+    Returns
+    -------
+    RET1: RETURN VALUE DESCRIPTION
+
+    """
+    full_sf = np.array([sh_to_sf(i, sphere, sh_order, full_sh_basis) for i in averaged_data])
+    sym_sh = np.array([sf_to_sh(i, sphere, sh_order, symmetric_basis) for i in full_sf])
+
+    sym_sf = np.array([sh_to_sf(i, sphere, sh_order, symmetric_basis) for i in sym_sh])
+
+    error = np.sum((full_sf - sym_sf)**2, axis=-1)
+    return error/error.max()
+
