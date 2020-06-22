@@ -40,6 +40,14 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
     Compute the average of fodf in data with
     its 26 neighbors by batches
     """
+    # Default batch size (10 slices)
+    batch_size = 10
+
+    # If the volume is smaller than batch_size, compute it
+    # in one pass with compute_avg_fodf
+    if data.shape[0] + 2 < batch_size:
+        return compute_avg_fodf(data, sphere, sh_order, input_sh_basis)
+
     # Table of correspondance between a segment and its invert on the sphere
     antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
 
@@ -53,16 +61,26 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
     # Zero pad sf data
     pad_width = ((1, 1),(1, 1),(1, 1),(0, 0))
     sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
-    
-    # Default batch size (10 slices)
-    batch_size = 10
+    augm_dim = sf.shape
+
     # Last batch can be bigger than the others
-    number_of_batches = int(dim[0] / batch_size)
+    number_of_batches = int((augm_dim[0] - 2) / (batch_size - 2))
 
     # TODO: Compute directions and hemisphere once before loops here
 
     for num_batch in range(number_of_batches):
-        # select batch to process
+        # Select batch to process
+        start = int(num_batch * (batch_size - 2))
+        stop = int(start + batch_size)
+        if (num_batch + 1) * (batch_size - 2) + batch_size > augm_dim[0]:
+            stop = augm_dim[0]
+
+        batch = sf[start:stop]
+        dim = (batch.shape[0] - 2,
+               batch.shape[1] - 2,
+               batch.shape[2] - 2,
+               batch.shape[3])
+
         for i in range(3):
             for j in range(3):
                 for k in range(3):
@@ -70,8 +88,8 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
                     hemisphere = get_hemisphere_from_direction(direction, sphere)
                     # too computationnaly intense
                     # won't work on big datasets
-                    mean_sf[..., hemisphere] += \
-                        sf[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
+                    mean_sf[start:start + dim[0]][..., hemisphere] += \
+                        batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
 
 
     mean_sf = mean_sf / 27.0
@@ -80,7 +98,7 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
     return mean_sh
 
 
-def compute_avg_fodf(data, affine, sphere, sh_order=8,
+def compute_avg_fodf(data, sphere, sh_order=8,
                      input_sh_basis='descoteaux07'):
     """
     Compute the average of fodf in data with its 26 neighbors.
