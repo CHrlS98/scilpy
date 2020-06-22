@@ -91,7 +91,6 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
                     mean_sf[start:start + dim[0]][..., hemisphere] += \
                         batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
 
-
     mean_sf = mean_sf / 27.0
     mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
 
