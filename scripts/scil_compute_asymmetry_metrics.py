@@ -18,7 +18,8 @@ from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
 
 from scilpy.reconst.average_fodf import (compute_diff_fodf, 
                                          compute_error, 
-                                         compute_reconst_error)
+                                         compute_reconst_error,
+                                         compute_diff_mask)
 
 
 def _build_arg_parser():
@@ -62,6 +63,11 @@ def _build_arg_parser():
     )
 
     p.add_argument(
+        '--diff_mask_out',
+        help='Map displaying presence of FODF in one of both images'
+    )
+
+    p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
         help='SH order of the input (Default: 8)')
 
@@ -88,6 +94,8 @@ def main():
         outputs.append(args.mean_square_error_out)
     if args.reconst_error_out:
         outputs.append(args.reconst_error_out)
+    if args.diff_mask_out:
+        outputs.append(args.diff_mask_out)
     if not outputs:
         parser.error('No output to be done')
 
@@ -130,6 +138,13 @@ def main():
         reconst_error_img = nib.Nifti1Image(reconst_error.astype(np.float32),
                                             mean_fodf_img.affine)
         reconst_error_img.to_filename(args.reconst_error_out)
+
+    if args.diff_mask_out:
+        logging.info('Compute diff mask')
+        diff_mask = compute_diff_mask(symm_fodf, mean_fodf)
+        diff_mask_img = nib.Nifti1Image(diff_mask.astype(np.float32),
+                                        mean_fodf_img.affine)
+        diff_mask_img.to_filename(args.diff_mask_out)
 
     logging.info('Done.')
 

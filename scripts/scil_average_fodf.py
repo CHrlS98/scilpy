@@ -16,11 +16,10 @@ from dipy.data import get_sphere
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
 
-from scilpy.reconst.average_fodf import (compute_avg_fodf, 
-                                         compute_naive_avg_fodf, 
-                                         compute_diff_fodf, 
-                                         compute_error, 
-                                         compute_reconst_error)
+from scilpy.reconst.average_fodf import (compute_avg_fodf,
+                                         compute_naive_avg_fodf,
+                                         compute_avg_fodf_batch
+                                        )
 
 
 def _build_arg_parser():
@@ -88,7 +87,7 @@ def main():
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
     else:
         logging.info('Computing average fodf (fast implementation)')
-        avg_fodf = compute_avg_fodf(img_data, affine, sphere,
+        avg_fodf = compute_avg_fodf_batch(img_data, sphere,
                                     args.sh_order, args.sh_basis)
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
 

@@ -34,6 +34,52 @@ def compute_local_mean(data, sphere, antipods_table):
     return out_value / (data.shape[0] * data.shape[1] * data.shape[2])
 
 
+def compute_avg_fodf_batch(data, sphere, sh_order=8,
+                           input_sh_basis='descoteaux07'):
+    """
+    Compute the average of fodf in data with
+    its 26 neighbors by batches
+    """
+    # Table of correspondance between a segment and its invert on the sphere
+    antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
+
+    # Convert to spherical function
+    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data])
+
+    # Zero-initialize array for mean SF
+    mean_sf = np.zeros_like(sf)
+    dim = mean_sf.shape
+
+    # Zero pad sf data
+    pad_width = ((1, 1),(1, 1),(1, 1),(0, 0))
+    sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
+    
+    # Default batch size (10 slices)
+    batch_size = 10
+    # Last batch can be bigger than the others
+    number_of_batches = int(dim[0] / batch_size)
+
+    # TODO: Compute directions and hemisphere once before loops here
+
+    for num_batch in range(number_of_batches):
+        # select batch to process
+        for i in range(3):
+            for j in range(3):
+                for k in range(3):
+                    direction = np.array([i-1, j-1, k-1])
+                    hemisphere = get_hemisphere_from_direction(direction, sphere)
+                    # too computationnaly intense
+                    # won't work on big datasets
+                    mean_sf[..., hemisphere] += \
+                        sf[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
+
+
+    mean_sf = mean_sf / 27.0
+    mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
+
+    return mean_sh
+
+
 def compute_avg_fodf(data, affine, sphere, sh_order=8,
                      input_sh_basis='descoteaux07'):
     """
@@ -128,4 +174,15 @@ def compute_reconst_error(averaged_data, sh_order, symmetric_basis, full_sh_basi
     sym_sf = np.array([sh_to_sf(i, sphere, sh_order, symmetric_basis) for i in sym_sh])
 
     error = np.sum((full_sf - sym_sf)**2, axis=-1)
-    return error/error.max()
+    return error / error.max()
+
+
+def compute_diff_mask(original_data, averaged_data):
+    """
+    Compute a mask showing highlighting the zones where a FODF is only
+    present in one of the images
+    """
+    mask_for_original = (np.sum(np.abs(original_data), axis=-1)) > 0
+    mask_for_averaged = (np.sum(np.abs(averaged_data), axis=-1)) > 0
+
+    return (mask_for_averaged != mask_for_original)
