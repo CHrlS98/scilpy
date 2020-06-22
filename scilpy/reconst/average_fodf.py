@@ -20,6 +20,9 @@ def get_hemisphere_from_direction(direction, sphere):
 
 
 def compute_local_mean(data, sphere, antipods_table):
+    """
+    Compute local mean on the array 'data' (3x3x3xD array)
+    """
     out_value = np.zeros_like(data[0, 0, 0])
     for x in range(data.shape[0]):
         for y in range(data.shape[1]):
@@ -31,8 +34,8 @@ def compute_local_mean(data, sphere, antipods_table):
     return out_value / (data.shape[0] * data.shape[1] * data.shape[2])
 
 
-def compute_avg_fodf(data, affine, sphere, mask = None, 
-                     sh_order=8, input_sh_basis='descoteaux07'):
+def compute_avg_fodf(data, affine, sphere, sh_order=8,
+                     input_sh_basis='descoteaux07'):
     """
     Compute the average of fodf in data with its 26 neighbors.
     """
@@ -55,9 +58,12 @@ def compute_avg_fodf(data, affine, sphere, mask = None,
             for k in range(3):
                 direction = np.array([i-1, j-1, k-1])
                 hemisphere = get_hemisphere_from_direction(direction, sphere)
+                # too computationnaly intense
+                # won't work on big datasets
                 mean_sf[..., hemisphere] += \
                     sf[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
 
+    mean_sf = mean_sf / 27.0
     mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
 
     return mean_sh
@@ -107,9 +113,6 @@ def compute_error(input_data, averaged_data, sh_order, symmetric_basis, full_sh_
     input_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, symmetric_basis) for slice_i in input_data])
     mean_sf = np.array([sh_to_sf(slice_i, sphere, sh_order, full_sh_basis) for slice_i in averaged_data])
 
-    input_sf_norm = np.linalg.norm(input_sf, axis=-1)
-    mean_sf_norm = np.linalg.norm(mean_sf, axis=-1)
-
     error = np.sum((mean_sf - input_sf)**2, axis=-1)
     return error / error.max()
 
@@ -126,4 +129,3 @@ def compute_reconst_error(averaged_data, sh_order, symmetric_basis, full_sh_basi
 
     error = np.sum((full_sf - sym_sf)**2, axis=-1)
     return error/error.max()
-

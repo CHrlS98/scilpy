@@ -172,14 +172,18 @@ def add_sh_basis_args(parser, mandatory=False):
     mandatory: bool
         Whether this argument is mandatory.
     """
-    choices = ['descoteaux07', 'tournier07', 'descoteaux07_full']
+    choices = ['descoteaux07', 'tournier07', 'descoteaux07_full', 'tournier07_full']
     def_val = 'descoteaux07'
     help_msg = 'Spherical harmonics basis used for the SH coefficients.\nMust ' +\
-               'be either \'descoteaux07\' or \'tournier07\' [%(default)s]:\n' +\
-               '    \'descoteaux07\': SH basis from the Descoteaux et al.\n' +\
-               '                      MRM 2007 paper\n' +\
-               '    \'tournier07\'  : SH basis from the Tournier et al.\n' +\
-               '                      NeuroImage 2007 paper.'
+               'be either \'descoteaux07[_full]\' or \'tournier07[_full]\' [%(default)s]:\n' +\
+               '    \'descoteaux07\'     : SH basis from the Descoteaux et al.\n' +\
+               '                           MRM 2007 paper\n' +\
+               '    \'tournier07\'       : SH basis from the Tournier et al.\n' +\
+               '                           NeuroImage 2007 paper.'+\
+               '    \'descoteaux07_full\': SH basis from the Descoteaux et al.\n' +\
+               '                           MRM 2007 paper\n' +\
+               '    \'tournier07_full\'  : SH basis from the Tournier et al.\n' +\
+               '                           NeuroImage 2007 paper.'
 
     if mandatory:
         arg_name = 'sh_basis'

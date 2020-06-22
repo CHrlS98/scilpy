@@ -31,7 +31,7 @@ def _build_arg_parser():
                    help='Path to the input fODF file (.nii or .nii.gz format)')
     
     p.add_argument('output',
-        help='Output path (without extension).')
+        help='Output path with extension (.nii or .nii.gz)')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
@@ -42,10 +42,10 @@ def _build_arg_parser():
         help='Sphere used for the SH reprojection'
     )
 
-    p.add_argument(
-        '--mask', default=None,
-        help='Mask to use for computing the average fodf'
-    )
+    #p.add_argument(
+    #    '--mask', default=None,
+    #    help='Mask to use for computing the average fodf'
+    #)
 
     p.add_argument(
         '--naive', default=False, action='store_true',
@@ -70,10 +70,10 @@ def main():
     # Prepare data
     sphere = get_sphere(args.sphere)
     img = nib.nifti1.load(args.input)
-    mask_data = None
-    if args.mask != None:
-        mask = nib.nifti1.load(args.mask)
-        mask_data = mask.get_fdata()
+    #mask_data = None
+    #if args.mask != None:
+    #    mask = nib.nifti1.load(args.mask)
+    #    mask_data = mask.get_fdata()
 
     img_data = img.get_fdata()
     affine = img.affine
@@ -88,30 +88,12 @@ def main():
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
     else:
         logging.info('Computing average fodf (fast implementation)')
-        avg_fodf = compute_avg_fodf(img_data, affine, sphere, mask_data,
+        avg_fodf = compute_avg_fodf(img_data, affine, sphere,
                                     args.sh_order, args.sh_basis)
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
 
-    # Computing difference between symmetric and asymmetric images
-    logging.info('Computing difference fodf between input and output')
-    diff_fodf = compute_diff_fodf(img_data, avg_fodf, args.sh_order, args.sh_basis, 'descoteaux07_full', sphere)
-    diff_img = nib.Nifti1Image(diff_fodf.astype(np.float32), affine)
-
-    # Computing meansquared error
-    logging.info('Computing mean squared error')
-    ms_error = compute_error(img_data, avg_fodf, args.sh_order, args.sh_basis, 'descoteaux07_full', sphere)
-    ms_error_img = nib.Nifti1Image(ms_error.astype(np.float32), affine)
-
-    # Computing reconstruction error
-    loggin.info('Computing reconstruction error')
-    reconst_error = compute_reconst_error(avg_fodf, args.sh_order, args.sh_basis, 'descoteaux07_full', sphere)
-    reconst_error_img = nib.Nifti1Image(reconst_error.astype(np.float32), affine)
-
-    logging.info('Saving outputs')
-    avg_img.to_filename(args.output + '_fodf.nii.gz')
-    diff_img.to_filename(args.output + '_diff.nii.gz')
-    ms_error_img.to_filename(args.output + '_ms_error.nii.gz')
-    reconst_error_img.to_filename(args.output + '_reconst_error.nii.gz')
+    logging.info('Saving output')
+    avg_img.to_filename(args.output)
 
 
 if __name__ == "__main__":

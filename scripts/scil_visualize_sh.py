@@ -18,8 +18,7 @@ from fury import window, actor, ui
 from scilpy.io.utils import (add_overwrite_arg,
                              add_sh_basis_args)
 
-WINDOW_SIZE=(512, 512)
-slice_index = 50
+WINDOW_SIZE=(768, 768)
 
 def visualize_sfs(sfs, sphere, scale=0.8, out_path=None, window_size=WINDOW_SIZE):
     odfs = actor.odf_slicer(sfs, radial_scale=True,
