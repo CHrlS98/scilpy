@@ -40,14 +40,6 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
     Compute the average of fodf in data with
     its 26 neighbors by batches
     """
-    # Default batch size (10 slices)
-    batch_size = 10
-
-    # If the volume is smaller than batch_size, compute it
-    # in one pass with compute_avg_fodf
-    if data.shape[0] + 2 < batch_size:
-        return compute_avg_fodf(data, sphere, sh_order, input_sh_basis)
-
     # Table of correspondance between a segment and its invert on the sphere
     antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
 
@@ -63,11 +55,18 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
     sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
     augm_dim = sf.shape
 
+    # Default batch size (10 slices)
+    batch_size = 10
     # Last batch can be bigger than the others
     number_of_batches = int((augm_dim[0] - 2) / (batch_size - 2))
 
-    # TODO: Compute directions and hemisphere once before loops here
+    # Corner case: When the dimension of the
+    # data is smaller than the batch size
+    if number_of_batches == 0:
+        number_of_batches = 1
+        batch_size = augm_dim[0]
 
+    # Compute average in batches
     for num_batch in range(number_of_batches):
         # Select batch to process
         start = int(num_batch * (batch_size - 2))
@@ -84,10 +83,9 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
         for i in range(3):
             for j in range(3):
                 for k in range(3):
+                    # TODO: Compute directions and hemisphere once outside loops
                     direction = np.array([i-1, j-1, k-1])
                     hemisphere = get_hemisphere_from_direction(direction, sphere)
-                    # too computationnaly intense
-                    # won't work on big datasets
                     mean_sf[start:start + dim[0]][..., hemisphere] += \
                         batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
 
@@ -121,8 +119,6 @@ def compute_avg_fodf(data, sphere, sh_order=8,
             for k in range(3):
                 direction = np.array([i-1, j-1, k-1])
                 hemisphere = get_hemisphere_from_direction(direction, sphere)
-                # too computationnaly intense
-                # won't work on big datasets
                 mean_sf[..., hemisphere] += \
                     sf[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
 

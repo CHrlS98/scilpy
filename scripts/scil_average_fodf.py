@@ -5,6 +5,7 @@
 Script to compute neighbors average from fODF
 """
 
+import time
 import argparse
 import logging
 
@@ -16,8 +17,7 @@ from dipy.data import get_sphere
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
 
-from scilpy.reconst.average_fodf import (compute_avg_fodf,
-                                         compute_naive_avg_fodf,
+from scilpy.reconst.average_fodf import (compute_naive_avg_fodf,
                                          compute_avg_fodf_batch
                                         )
 
@@ -37,14 +37,9 @@ def _build_arg_parser():
         help='SH order of the input (Default: 8)')
 
     p.add_argument(
-        '--sphere', default='symmetric724',
+        '--sphere', default='repulsion100',
         help='Sphere used for the SH reprojection'
     )
-
-    #p.add_argument(
-    #    '--mask', default=None,
-    #    help='Mask to use for computing the average fodf'
-    #)
 
     p.add_argument(
         '--naive', default=False, action='store_true',
@@ -74,11 +69,11 @@ def main():
     #    mask = nib.nifti1.load(args.mask)
     #    mask_data = mask.get_fdata()
 
-    img_data = img.get_fdata()
+    img_data = img.get_fdata()[30:34]
     affine = img.affine
 
     # Computing neighbors average of fODFs
-    avg_fodf = None
+    t0 = time.perf_counter()
     avg_img = None
     if args.naive:
         logging.info('Computing average fodf (naive implementation)')
@@ -90,6 +85,10 @@ def main():
         avg_fodf = compute_avg_fodf_batch(img_data, sphere,
                                     args.sh_order, args.sh_basis)
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
+    t1 = time.perf_counter()
+
+    elapsedTime = t1 - t0
+    print('Elapsed time (s): ', elapsedTime)
 
     logging.info('Saving output')
     avg_img.to_filename(args.output)
