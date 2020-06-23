@@ -69,7 +69,7 @@ def main():
     #    mask = nib.nifti1.load(args.mask)
     #    mask_data = mask.get_fdata()
 
-    img_data = img.get_fdata()[30:34]
+    img_data = img.get_fdata()
     affine = img.affine
 
     # Computing neighbors average of fODFs
