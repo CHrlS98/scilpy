@@ -16,7 +16,7 @@ from dipy.data import get_sphere
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist)
 
-from scilpy.reconst.average_fodf import (compute_diff_fodf, 
+from scilpy.reconst.asym_fodf import (compute_diff_fodf, 
                                          compute_error, 
                                          compute_reconst_error,
                                          compute_diff_mask)
