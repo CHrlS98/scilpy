@@ -117,14 +117,7 @@ def get_weights_table(sphere):
     return table
 
 
-def prepare_data(sf):
-    # Zero pad sf data
-    pad_width = ((1, 1),(1, 1),(1, 1),(0, 0))
-    padded_sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
-    augm_dim = padded_sf.shape
-
-    # Default batch size (10 slices)
-    batch_size = 10
+def prepare_batch(batch_size, augm_dim):
     # Last batch can be bigger than the others
     number_of_batches = int((augm_dim[0] - 2) / (batch_size - 2))
 
@@ -134,7 +127,7 @@ def prepare_data(sf):
         number_of_batches = 1
         batch_size = augm_dim[0]
 
-    return number_of_batches, batch_size, augm_dim, padded_sf
+    return number_of_batches, batch_size
 
 
 def compute_avg_fodf_weighted(data, sphere, sh_order=8,
@@ -149,8 +142,13 @@ def compute_avg_fodf_weighted(data, sphere, sh_order=8,
     # Initialize array for mean SF with current voxel value
     mean_sf = np.copy(sf)
 
-    # Prepare data
-    number_of_batches, batch_size, augm_dim, padded_sf = prepare_data(sf)
+    # Zero pad sf data
+    pad_width = ((1, 1),(1, 1),(1, 1),(0, 0))
+    sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
+
+    # Prepare batch
+    batch_size = 10
+    number_of_batches, batch_size = prepare_batch(batch_size, sf.shape)
     weights_by_direction = get_weights_table(sphere)
 
     # Compute average in batches
@@ -158,10 +156,10 @@ def compute_avg_fodf_weighted(data, sphere, sh_order=8,
         # Select batch to process
         start = int(num_batch * (batch_size - 2))
         stop = int(start + batch_size)
-        if (num_batch + 1) * (batch_size - 2) + batch_size > augm_dim[0]:
-            stop = augm_dim[0]
+        if (num_batch + 1) * (batch_size - 2) + batch_size > sf.shape[0]:
+            stop = sf.shape[0]
 
-        batch = padded_sf[start:stop]
+        batch = sf[start:stop]
         dim = (batch.shape[0] - 2, batch.shape[1] - 2,
                batch.shape[2] - 2, batch.shape[3])
 

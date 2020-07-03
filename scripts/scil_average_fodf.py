@@ -37,7 +37,7 @@ def _build_arg_parser():
         help='SH order of the input (Default: 8)')
 
     p.add_argument(
-        '--sphere', default='repulsion100',
+        '--sphere', default='symmetric724',
         help='Sphere used for the SH reprojection'
     )
 
