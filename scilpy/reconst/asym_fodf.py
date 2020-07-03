@@ -112,8 +112,7 @@ def get_weights_table(sphere):
     dotprod = np.where(dotprod > 0.0, dotprod, 0.0)
 
     keys = list(map(tuple, directions))
-    # !! table not ok !!
-    table = dict(zip(keys, list(dotprod)))
+    table = dict(zip(keys, list(dotprod.T)))
 
     return table
 
@@ -162,7 +161,7 @@ def compute_avg_fodf_weighted(data, sphere, sh_order=8,
         if (num_batch + 1) * (batch_size - 2) + batch_size > augm_dim[0]:
             stop = augm_dim[0]
 
-        batch = sf[start:stop]
+        batch = padded_sf[start:stop]
         dim = (batch.shape[0] - 2, batch.shape[1] - 2,
                batch.shape[2] - 2, batch.shape[3])
 
@@ -174,7 +173,6 @@ def compute_avg_fodf_weighted(data, sphere, sh_order=8,
                         np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k], weights)
 
     # TODO: Add normalization factor
-    #mean_sf = mean_sf / 27.0
 
     mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
 

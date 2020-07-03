@@ -14,8 +14,7 @@ from dipy.data import get_sphere
 from dipy.reconst.shm import sh_to_sf
 from fury import window, actor
 
-from scilpy.io.utils import (add_overwrite_arg,
-                             add_sh_basis_args)
+from scilpy.io.utils import (add_sh_basis_args)
 
 WINDOW_SIZE=(768, 768)
 
@@ -44,6 +43,8 @@ def _build_arg_parser():
 
     p.add_argument('--sphere', default='symmetric724',
                    help='Name of the sphere used to reconstruct SF')
+
+    add_sh_basis_args(p)
 
     return p
 
@@ -118,6 +119,7 @@ def display_scene(odf_data, sphere, error_data, shape3D,
     scene.set_camera(position=view_position,
                      focal_point=view_center,
                      view_up=view_up)
+    scene.zoom(0.025)
     showm = window.ShowManager(scene, size=WINDOW_SIZE,
                                title='Visualize SH',
                                reset_camera=False,
@@ -153,9 +155,9 @@ def main():
     sph_gtab = get_sphere(args.sphere)
 
     odf_data_sf = sh_to_sf(fodf_cropped_data,
-                                 sph_gtab,
-                                 sh_order=args.sh_order,
-                                 basis_type='descoteaux07_full')
+                           sph_gtab,
+                           sh_order=args.sh_order,
+                           basis_type=args.sh_basis)
 
     shape = error_data.shape[:3]
     display_scene(odf_data_sf, sph_gtab,

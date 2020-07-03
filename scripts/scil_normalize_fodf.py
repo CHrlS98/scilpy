@@ -52,7 +52,13 @@ def main():
     affine = img.affine
 
     logging.info('Normalizing FODFs')
-    normalized_sh = img_data / np.linalg.norm(img_data, axis=-1, keepdims=True)
+    norm = np.linalg.norm(img_data, axis=-1, keepdims=False)
+    normalized_sh = np.zeros_like(img_data)
+    mask = norm > 0
+    masked_norm = np.reshape(norm[mask],
+                             (norm[mask].shape[0], 1))
+    normalized_sh[mask] = img_data[mask] / masked_norm
+
     np.nan_to_num(normalized_sh, copy=False)
 
     logging.info('Saving output')
