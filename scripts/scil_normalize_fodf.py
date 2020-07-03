@@ -51,7 +51,7 @@ def main():
     img_data = img.get_fdata()
     affine = img.affine
 
-    logging.info('Computing average fodf (naive implementation)')
+    logging.info('Normalizing FODFs')
     normalized_sh = img_data / np.linalg.norm(img_data, axis=-1, keepdims=True)
     np.nan_to_num(normalized_sh, copy=False)
 

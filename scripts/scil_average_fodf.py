@@ -18,7 +18,8 @@ from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
 
 from scilpy.reconst.asym_fodf import (compute_naive_avg_fodf,
-                                         compute_avg_fodf_batch)
+                                      compute_avg_fodf_weighted,
+                                      compute_avg_fodf_batch)
 
 
 def _build_arg_parser():
@@ -43,6 +44,11 @@ def _build_arg_parser():
     p.add_argument(
         '--naive', default=False, action='store_true',
         help='Use naive implementation with for loops (for ground truth)'
+    )
+
+    p.add_argument(
+        '--weighted', default=False, action='store_true',
+        help='Use weights from dot product in average'
     )
 
     add_sh_basis_args(p)
@@ -74,7 +80,12 @@ def main():
     # Computing neighbors average of fODFs
     t0 = time.perf_counter()
     avg_img = None
-    if args.naive:
+    if args.weighted:
+        logging.info('Computing average fodf (weighted)')
+        avg_fodf = compute_avg_fodf_weighted(img_data, sphere, args.sh_order,
+                                          args.sh_basis)
+        avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
+    elif args.naive:
         logging.info('Computing average fodf (naive implementation)')
         avg_fodf = compute_naive_avg_fodf(img_data, sphere, args.sh_order,
                                           args.sh_basis)
