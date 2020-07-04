@@ -59,8 +59,6 @@ def main():
                              (norm[mask].shape[0], 1))
     normalized_sh[mask] = img_data[mask] / masked_norm
 
-    np.nan_to_num(normalized_sh, copy=False)
-
     logging.info('Saving output')
     normalized_img = nib.Nifti1Image(normalized_sh.astype(np.float32), affine)
     normalized_img.to_filename(args.output)
