@@ -44,7 +44,7 @@ def compute_avg_fodf_batch(data, sphere, sh_order=8,
     antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
 
     # Convert to spherical function
-    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data])
+    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data], dtype='float32')
 
     # Zero-initialize array for mean SF
     mean_sf = np.zeros_like(sf)
@@ -137,7 +137,7 @@ def compute_avg_fodf_weighted(data, sphere, sh_order=8,
     its 26 neighbors by batches
     """
     # Convert to spherical function
-    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data])
+    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data], dtype='float32')
 
     # Initialize array for mean SF with current voxel value
     mean_sf = np.copy(sf)
@@ -187,7 +187,7 @@ def compute_naive_avg_fodf(data, sphere, sh_order=8,
     output_sh_basis = 'descoteaux07_full'
 
     # naive implementation for ground truth
-    sf = np.array([sh_to_sf(slice_i, sphere, sh_order=sh_order, basis_type=input_sh_basis) for slice_i in data])
+    sf = np.array([sh_to_sf(slice_i, sphere, sh_order=sh_order, basis_type=input_sh_basis) for slice_i in data], dtype='float32')
     mean_sf = np.zeros_like(sf)
     for x in range(1, data.shape[0] - 1):
         for y in range(1, data.shape[1] - 1):
