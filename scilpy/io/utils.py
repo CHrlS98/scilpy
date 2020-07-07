@@ -179,7 +179,7 @@ def add_sh_basis_args(parser, mandatory=False):
                '    \'descoteaux07\'     : SH basis from the Descoteaux et al.\n' +\
                '                           MRM 2007 paper\n' +\
                '    \'tournier07\'       : SH basis from the Tournier et al.\n' +\
-               '                           NeuroImage 2007 paper.'+\
+               '                           NeuroImage 2007 paper.\n'+\
                '    \'descoteaux07_full\': SH basis from the Descoteaux et al.\n' +\
                '                           MRM 2007 paper\n' +\
                '    \'tournier07_full\'  : SH basis from the Tournier et al.\n' +\

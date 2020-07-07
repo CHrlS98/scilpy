@@ -27,7 +27,13 @@ def _build_arg_parser():
     p.add_argument('slice_index', type=int,
                    help='The index of the slice to visualize in axis_name')
 
-    p.add_argument('--background_image', 
+    p.add_argument('--min_value', type=float,
+                   help='The minimum value for mapping background colors')
+
+    p.add_argument('--max_value', type=float,
+                   help='The maximum value for mapping background colors')
+
+    p.add_argument('--background', 
                    help='Optional background image file')
 
     p.add_argument('--output',
@@ -35,8 +41,7 @@ def _build_arg_parser():
 
     p.add_argument('--axis_name', default='axial', 
                    choices={'axial', 'coronal', 'sagittal'},
-                   help='Name of the axis to visualize.\
-                   One of: [sagittal, coronal, axial]')
+                   help='Name of the axis to visualize.')
 
     p.add_argument('--sh_order', type=int, default=8,
                    help='Order of the original SH.')
@@ -44,8 +49,17 @@ def _build_arg_parser():
     p.add_argument('--sphere', default='symmetric724',
                    help='Name of the sphere used to reconstruct SF')
 
+    p.add_argument('--scale', default=0.5, type=float,
+                   help='Scaling factor for FODF.')
+
     p.add_argument('--radial_scale_off', default=False, 
                    action='store_true', help='Disable radial scale for ODF slicer')
+
+    p.add_argument('--norm_off', default=False,
+                   action='store_true', help='Disable normalization of ODF slicer')
+
+    p.add_argument('--interactor', default='image', choices={'image', 'trackball'},
+                   help='Specify interactor mode for vtk window')
 
     add_sh_basis_args(p)
 
@@ -59,12 +73,13 @@ def get_translation_matrix(translation):
                      [0.0, 0.0, 0.0, 1.0]])
 
 
-def prepare_odf_actor(data, sphere, axis_name, radial_scale_off):
+def prepare_odf_actor(data, sphere, axis_name, scale, radial_scale_off, norm_off):
     odf_actor = actor.odf_slicer(data,
                                  radial_scale=not(radial_scale_off),
                                  sphere=sphere,
                                  colormap='jet',
-                                 scale=0.5)
+                                 norm=not(norm_off),
+                                 scale=scale)
 
     if axis_name == 'sagittal':
         odf_actor.display_extent(0, 0, 0, data.shape[1] - 1, 0, data.shape[2] - 1)
@@ -76,19 +91,25 @@ def prepare_odf_actor(data, sphere, axis_name, radial_scale_off):
     return odf_actor
 
 
-def prepare_slicer_actor(data, axis_name):
+def prepare_slicer_actor(data, min_value, max_value, axis_name):
+    value_range = [data.min(), data.max()]
+    if min_value is not None:
+        value_range[0] = min_value
+    if max_value is not None:
+        value_range[1] = max_value
+    value_range = tuple(value_range)
 
     if axis_name == 'sagittal':
         slicer_actor = actor.slicer(data, affine=get_translation_matrix((1.0, 0.0, 0.0)),
-                                    interpolation='nearest')
+                                    value_range=value_range, interpolation='nearest')
         slicer_actor.display_extent(0, 0, 0, data.shape[1] - 1, 0, data.shape[2] - 1)
     elif axis_name == 'coronal':
         slicer_actor = actor.slicer(data, affine=get_translation_matrix((0.0, -1.0, 0.0)),
-                                    interpolation='nearest')
+                                    value_range=value_range, interpolation='nearest')
         slicer_actor.display_extent(0, data.shape[0] - 1, 0, 0, 0, data.shape[2] - 1)
     elif axis_name == 'axial':
         slicer_actor = actor.slicer(data, affine=get_translation_matrix((0.0, 0.0, 1.0)),
-                                    interpolation='nearest')
+                                    value_range=value_range, interpolation='nearest')
         slicer_actor.display_extent(0, data.shape[0] - 1, 0, data.shape[1] - 1, 0, 0)
 
     return slicer_actor
@@ -133,28 +154,29 @@ def prepare_scene(axis_name, shape):
     return scene
 
 
-def display_scene(odf_data, sphere, bg_data, radial_scale_off,
-                  orientation, output):
+def display_scene(odf_data, sphere, bg_data, bg_min, bg_max, scale, 
+                  radial_scale_off, norm_off, orientation, interactor, output):
     scene = prepare_scene(orientation, odf_data.shape)
 
     # Instanciate ODF slicer actor
-    odf_actor = prepare_odf_actor(odf_data, sphere, orientation, radial_scale_off)
+    odf_actor = prepare_odf_actor(odf_data, sphere, orientation, 
+                                  scale, radial_scale_off, norm_off)
     scene.add(odf_actor)
 
     # Prepare error map actor if supplied
     if bg_data is not None:
-        bg_actor = prepare_slicer_actor(bg_data, orientation)
+        bg_actor = prepare_slicer_actor(bg_data, bg_min, bg_max, orientation)
         scene.add(bg_actor)
 
     showm = window.ShowManager(scene, size=WINDOW_SIZE,
                                title='Visualize SH',
                                reset_camera=False,
-                               interactor_style='image')
+                               interactor_style=interactor)
     showm.initialize()
     showm.start()
 
     if output:
-        window.record(scene, size=WINDOW_SIZE, out_path=output, reset_camera=False)
+        window.snapshot(scene, fname=output, size=WINDOW_SIZE)
 
 
 def crop_data_along_axis(data, idx, axis_name):
@@ -174,8 +196,8 @@ def main():
     fodf_data = fodf_img.get_fdata()
 
     bg_cropped_data = None
-    if args.background_image:
-        bg_img = nib.nifti1.load(args.background_image)
+    if args.background:
+        bg_img = nib.nifti1.load(args.background)
         bg_cropped_data =\
              crop_data_along_axis(bg_img.get_fdata(), args.slice_index, args.axis_name)
 
@@ -190,8 +212,13 @@ def main():
 
     display_scene(odf_data_sf, sph_gtab,
                   bg_cropped_data,
+                  args.min_value,
+                  args.max_value,
+                  args.scale,
                   args.radial_scale_off,
+                  args.norm_off,
                   args.axis_name,
+                  args.interactor,
                   args.output)
 
 

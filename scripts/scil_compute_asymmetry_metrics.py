@@ -40,10 +40,10 @@ def _build_arg_parser():
                    default='descoteaux07_full',
                    help='Name of the SH basis used with the mean fodf image')
 
-    p.add_argument('symm_fodf_input',
+    p.add_argument('--symm_fodf_input',
                    help='Path to the input symmetric fodf file (.nii or .nii.gz)')
 
-    p.add_argument('symm_fodf_sh_basis', choices=sh_basis_choices,
+    p.add_argument('--symm_fodf_sh_basis', choices=sh_basis_choices,
                    default='descoteaux07',
                    help='Name of the SH basis used with the symmetric fodf image')
 
@@ -87,6 +87,10 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     # Checking args
+    if args.symm_fodf_input:
+        if not args.symm_fodf_sh_basis:
+            parser.error('Supply a SH basis for symmetric FODF input')
+
     outputs = []
     if args.diff_out:
         outputs.append(args.diff_out)
@@ -99,7 +103,10 @@ def main():
     if not outputs:
         parser.error('No output to be done')
 
-    inputs = [ args.mean_fodf_input, args.symm_fodf_input]
+    if len(outputs) == 1 and args.reconst_error_out:
+        inputs = [ args.mean_fodf_input ]
+    else:
+        inputs = [ args.mean_fodf_input, args.symm_fodf_input]
 
     assert_inputs_exist(parser, inputs)
     assert_outputs_exist(parser, args, outputs, check_dir_exists=True)
@@ -107,10 +114,11 @@ def main():
     # Prepare data
     sphere = get_sphere(args.sphere)
     mean_fodf_img = nib.nifti1.load(args.mean_fodf_input)
-    symm_fodf_img = nib.nifti1.load(args.symm_fodf_input)
-
     mean_fodf = mean_fodf_img.get_fdata()
-    symm_fodf = symm_fodf_img.get_fdata()
+
+    if args.symm_fodf_input:
+        symm_fodf_img = nib.nifti1.load(args.symm_fodf_input)
+        symm_fodf = symm_fodf_img.get_fdata()
 
     if args.diff_out:
         logging.info('Computing difference fodf between input and output')
