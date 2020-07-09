@@ -6,118 +6,12 @@ import numpy as np
 from dipy.reconst.shm import sh_to_sf, sf_to_sh
 
 
-def get_hemisphere_from_direction(direction, sphere):
-    """
-    Get indices of vertices of sphere on the same hemisphere as 'direction'
-    """
-    if np.nonzero(direction) == 0:
-        return np.arange(sphere.vertices.size)
-
-    direction.reshape((3,1))
-    dotprod = np.dot(sphere.vertices, direction)
-
-    return np.nonzero(dotprod >= 0)[0]
-
-
-def compute_local_mean(data, sphere, antipods_table):
-    """
-    Compute local mean on the array 'data' (3x3x3xD array)
-    """
-    out_value = np.zeros_like(data[0, 0, 0])
-    for x in range(data.shape[0]):
-        for y in range(data.shape[1]):
-            for z in range(data.shape[2]):
-                direction = np.array([x-1, y-1, z-1])
-                hemisphere = get_hemisphere_from_direction(direction, sphere)
-                out_value[hemisphere] = out_value[hemisphere]\
-                    + data[x, y, z, antipods_table[hemisphere]]
-    return out_value / (data.shape[0] * data.shape[1] * data.shape[2])
-
-
-def compute_avg_fodf_batch(data, sphere, sh_order=8,
-                           input_sh_basis='descoteaux07'):
-    """
-    Compute the average of fodf in data with
-    its 26 neighbors by batches
-    """
-    # Table of correspondance between a segment and its invert on the sphere
-    antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
-
-    # Convert to spherical function
-    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data], dtype='float32')
-
-    # Zero-initialize array for mean SF
-    mean_sf = np.zeros_like(sf)
-    dim = mean_sf.shape
-
-    # Zero pad sf data
-    pad_width = ((1, 1),(1, 1),(1, 1),(0, 0))
-    sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
-    augm_dim = sf.shape
-
-    # Default batch size (10 slices)
-    batch_size = 10
-    # Last batch can be bigger than the others
-    number_of_batches = int((augm_dim[0] - 2) / (batch_size - 2))
-
-    # Corner case: When the dimension of the
-    # data is smaller than the batch size
-    if number_of_batches == 0:
-        number_of_batches = 1
-        batch_size = augm_dim[0]
-
-    # Compute average in batches
-    for num_batch in range(number_of_batches):
-        # Select batch to process
-        start = int(num_batch * (batch_size - 2))
-        stop = int(start + batch_size)
-        if (num_batch + 1) * (batch_size - 2) + batch_size > augm_dim[0]:
-            stop = augm_dim[0]
-
-        batch = sf[start:stop]
-        dim = (batch.shape[0] - 2,
-               batch.shape[1] - 2,
-               batch.shape[2] - 2,
-               batch.shape[3])
-
-        for i in range(3):
-            for j in range(3):
-                for k in range(3):
-                    # TODO: Compute directions and hemisphere once outside loops
-                    direction = np.array([i-1, j-1, k-1])
-                    hemisphere = get_hemisphere_from_direction(direction, sphere)
-                    mean_sf[start:start + dim[0]][..., hemisphere] += \
-                        batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k, antipods_table[hemisphere]]
-
-    mean_sf = mean_sf / 27.0
-    mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
-
-    return mean_sh
-
-
-def get_weights_table(sphere):
-    """
-    Calculate the dot product (cos(theta)) between vertices
-    on the sphere and directions to adjacent voxels
-
-    Returns dictionary mapping voxel directions to dot products
-    with sphere vertices in this direction for each direction
-    """
-    directions = np.transpose(np.indices((3, 3, 3)) - np.ones((3, 3, 3)))
-    directions = np.reshape(directions, (27, 3))
-    directions = np.delete(directions, 13, 0)
-
-    dir_norm = directions/np.linalg.norm(directions, axis=1, keepdims=True)
-    dotprod = np.dot(sphere.vertices, dir_norm.T)
-    dotprod = np.where(dotprod > 0.0, dotprod, 0.0)
-
-    keys = list(map(tuple, directions))
-    table = dict(zip(keys, list(dotprod.T)))
-
-    return table
-
-
 def prepare_batch(batch_size, augm_dim):
+    """
+    Compute number of batches and resulting batch size.
+    Resulting batch size will be modified if there is
+    not more than one batch to process
+    """
     # Last batch can be bigger than the others
     number_of_batches = int((augm_dim[0] - 2) / (batch_size - 2))
 
@@ -130,14 +24,41 @@ def prepare_batch(batch_size, augm_dim):
     return number_of_batches, batch_size
 
 
-def compute_avg_fodf_weighted(data, sphere, sh_order=8,
+def get_weights_table(sphere, sharpness):
+    """
+    Calculate the dot product (cos(theta)) between vertices
+    on the sphere and directions to adjacent voxels
+
+    Returns dictionary mapping voxel directions to dot products
+    with sphere vertices in this direction for each direction
+    """
+    # center directions around current voxel
+    directions = np.transpose(np.indices((3, 3, 3)) - np.ones((3, 3, 3)))
+    directions = np.reshape(directions, (27, 3))
+
+    # remove direction (0, 0, 0)
+    directions = np.delete(directions, 13, 0)
+
+    dir_norm = directions / np.linalg.norm(directions, axis=1, keepdims=True)
+    hemispheres = np.dot(sphere.vertices, dir_norm.T)
+    hemispheres = np.where(hemispheres > 0.0, hemispheres**sharpness, 0.0)
+
+    keys = list(map(tuple, directions))
+    hemis_by_dir = dict(zip(keys, list(hemispheres.T)))
+    sum_of_weights = np.sum(hemispheres, axis=-1)
+
+    return hemis_by_dir, sum_of_weights
+
+
+def compute_avg_fodf_no_weight(data, sphere, sh_order=8, batch_size=10,
                            input_sh_basis='descoteaux07'):
     """
     Compute the average of fodf in data with
     its 26 neighbors by batches
     """
     # Convert to spherical function
-    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data], dtype='float32')
+    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data],
+                  dtype='float32')
 
     # Initialize array for mean SF with current voxel value
     mean_sf = np.copy(sf)
@@ -147,9 +68,66 @@ def compute_avg_fodf_weighted(data, sphere, sh_order=8,
     sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
 
     # Prepare batch
-    batch_size = 10
     number_of_batches, batch_size = prepare_batch(batch_size, sf.shape)
-    weights_by_direction = get_weights_table(sphere)
+    hemis_by_dir, sum_of_weights = get_weights_table(sphere, 0.0)
+
+    # Compute average in batches
+    for num_batch in range(number_of_batches):
+        # Select batch to process
+        start = int(num_batch * (batch_size - 2))
+        stop = int(start + batch_size)
+        if (num_batch + 1) * (batch_size - 2) + batch_size > sf.shape[0]:
+            stop = sf.shape[0]
+
+        batch = sf[start:stop]
+        dim = (batch.shape[0] - 2,
+               batch.shape[1] - 2,
+               batch.shape[2] - 2,
+               batch.shape[3])
+
+        for key in hemis_by_dir:
+            i, j, k = int(key[0] + 1), int(key[1] + 1), int(key[2] + 1)
+            hemisphere = hemis_by_dir[key]
+            mean_sf[start:start + dim[0]] += \
+                np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k],
+                            hemisphere)
+
+        mean_sf[start:start + dim[0]] = \
+            np.multiply(mean_sf[start:start + dim[0]],
+                        1.0 / (sum_of_weights + 1.0))
+
+    mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
+
+    # DEBUG
+    #a = np.mean(mean_sf, axis=(0, 1, 2))
+    #b = np.mean(sf[1:-1, 1:-1, 1:-1], axis=(0, 1, 2))
+    #mean_error = np.mean(np.abs(b - a))
+    #print('Mean error: ', mean_error)
+    # DEBUG
+
+    return mean_sh
+
+
+def compute_avg_fodf_with_weights(data, sphere, sh_order=8, sharpness=1.0,
+                              batch_size=10, input_sh_basis='descoteaux07'):
+    """
+    Compute the average of fodf in data with
+    its 26 neighbors by batches
+    """
+    # Convert to spherical function
+    sf = np.array([sh_to_sf(i, sphere, sh_order, input_sh_basis) for i in data],
+                  dtype='float32')
+
+    # Initialize array for mean SF with current voxel value
+    mean_sf = np.copy(sf)
+
+    # Zero pad sf data
+    pad_width = ((1, 1),(1, 1),(1, 1),(0, 0))
+    sf = np.pad(sf, pad_width, mode='constant', constant_values=0.0)
+
+    # Prepare batch
+    number_of_batches, batch_size = prepare_batch(batch_size, sf.shape)
+    hemis_by_dir, sum_of_weights = get_weights_table(sphere, sharpness)
 
     # Compute average in batches
     for num_batch in range(number_of_batches):
@@ -163,40 +141,28 @@ def compute_avg_fodf_weighted(data, sphere, sh_order=8,
         dim = (batch.shape[0] - 2, batch.shape[1] - 2,
                batch.shape[2] - 2, batch.shape[3])
 
-        for key in weights_by_direction:
+        for key in hemis_by_dir:
             direction = np.array([key])
-            weights = weights_by_direction[key]
+            hemisphere = hemis_by_dir[key]
             i, j, k = int(key[0] + 1), int(key[1] + 1), int(key[2] + 1)
             mean_sf[start:start + dim[0]] += \
-                        np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k], weights)
+                np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k], 
+                            hemisphere)
 
-    # TODO: Add normalization factor
+        mean_sf[start:start + dim[0]] = \
+            np.multiply(mean_sf[start:start + dim[0]],
+                        1.0 / (sum_of_weights + 1.0))
+
+    # DEBUG
+    #a = np.mean(mean_sf, axis=(0, 1, 2))
+    #b = np.mean(sf[1:-1, 1:-1, 1:-1], axis=(0, 1, 2))
+    #mean_error = np.mean(np.abs(b - a))
+    #print('Mean error: ', mean_error)
+    # DEBUG
 
     mean_sh = np.array([sf_to_sh(i, sphere, sh_order, 'descoteaux07_full') for i in mean_sf])
 
     return mean_sh
-
-
-def compute_naive_avg_fodf(data, sphere, sh_order=8,
-                           input_sh_basis='descoteaux07'):
-    """
-    Naive implementation of neighbors average using for loops. Not optimized.
-    """
-    # Table of correspondance between a segment and its invert on the sphere
-    antipods_table = np.array([sphere.find_closest(xyz) for xyz in -sphere.vertices])
-    output_sh_basis = 'descoteaux07_full'
-
-    # naive implementation for ground truth
-    sf = np.array([sh_to_sf(slice_i, sphere, sh_order=sh_order, basis_type=input_sh_basis) for slice_i in data], dtype='float32')
-    mean_sf = np.zeros_like(sf)
-    for x in range(1, data.shape[0] - 1):
-        for y in range(1, data.shape[1] - 1):
-            for z in range(1, data.shape[2] - 1):
-                mean_sf[x, y, z] = compute_local_mean(sf[x-1:x+2,y-1:y+2, z-1:z+2], sphere, antipods_table)
-
-    averaged_data = np.array([sf_to_sh(slice_i, sphere, sh_order=8, basis_type=output_sh_basis) for slice_i in mean_sf])
-
-    return averaged_data
 
 
 def compute_diff_fodf(input_data, averaged_data, sh_order, symmetric_basis, full_sh_basis, sphere):

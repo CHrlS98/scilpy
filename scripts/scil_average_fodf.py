@@ -17,9 +17,8 @@ from dipy.data import get_sphere
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
 
-from scilpy.reconst.asym_fodf import (compute_naive_avg_fodf,
-                                      compute_avg_fodf_weighted,
-                                      compute_avg_fodf_batch)
+from scilpy.reconst.asym_fodf import (compute_avg_fodf_with_weights,
+                                      compute_avg_fodf_no_weight)
 
 
 def _build_arg_parser():
@@ -27,10 +26,10 @@ def _build_arg_parser():
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
 
     p.add_argument('input',
-                   help='Path to the input fODF file (.nii or .nii.gz format)')
+                   help='Path to the input fODF file')
     
     p.add_argument('output',
-        help='Output path with extension (.nii or .nii.gz)')
+                   help='Output path with extension')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
@@ -42,13 +41,18 @@ def _build_arg_parser():
     )
 
     p.add_argument(
-        '--naive', default=False, action='store_true',
-        help='Use naive implementation with for loops (for ground truth)'
+        '--weighted', default=False, action='store_true',
+        help='Use weights from dot product in average'
     )
 
     p.add_argument(
-        '--weighted', default=False, action='store_true',
-        help='Use weights from dot product in average'
+        '--sharpness', default=1.0, type=float,
+        help='Specify sharpness factor to use for weighted average'
+    )
+
+    p.add_argument(
+        '--batch_size', default=10, type=int,
+        help='Size of batches when computing average (at least 3)'
     )
 
     add_sh_basis_args(p)
@@ -66,13 +70,12 @@ def main():
     assert_inputs_exist(parser, args.input)
     assert_outputs_exist(parser, args, args.output, check_dir_exists=True)
 
+    if args.batch_size < 3:
+        parser.error('Batch size must be of at least 3.')
+
     # Prepare data
     sphere = get_sphere(args.sphere)
     img = nib.nifti1.load(args.input)
-    #mask_data = None
-    #if args.mask != None:
-    #    mask = nib.nifti1.load(args.mask)
-    #    mask_data = mask.get_fdata()
 
     img_data = img.get_fdata()
     affine = img.affine
@@ -82,18 +85,14 @@ def main():
     avg_img = None
     if args.weighted:
         logging.info('Computing average fodf (weighted)')
-        avg_fodf = compute_avg_fodf_weighted(img_data, sphere, args.sh_order,
-                                          args.sh_basis)
-        avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
-    elif args.naive:
-        logging.info('Computing average fodf (naive implementation)')
-        avg_fodf = compute_naive_avg_fodf(img_data, sphere, args.sh_order,
-                                          args.sh_basis)
+        avg_fodf = compute_avg_fodf_with_weights(img_data, sphere, args.sh_order,
+                                             args.sharpness, args.batch_size,
+                                             args.sh_basis)
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
     else:
-        logging.info('Computing average fodf (fast implementation)')
-        avg_fodf = compute_avg_fodf_batch(img_data, sphere,
-                                    args.sh_order, args.sh_basis)
+        logging.info('Computing average fodf (not weighted)')
+        avg_fodf = compute_avg_fodf_no_weight(img_data, sphere, args.sh_order,
+                                          args.batch_size, args.sh_basis)
         avg_img = nib.Nifti1Image(avg_fodf.astype(np.float32), affine)
     t1 = time.perf_counter()
 
