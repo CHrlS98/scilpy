@@ -5,20 +5,14 @@
 Script to normalize fODF
 """
 
-import time
 import argparse
 import logging
 
 import nibabel as nib
 import numpy as np
 
-from dipy.data import get_sphere
-
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
-                             assert_outputs_exist, add_sh_basis_args)
-
-from scilpy.reconst.asym_fodf import (compute_naive_avg_fodf,
-                                         compute_avg_fodf_batch)
+                             assert_outputs_exist)
 
 
 def _build_arg_parser():
