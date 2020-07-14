@@ -8,6 +8,23 @@ from dipy.reconst.shm import (sh_to_sf, sf_to_sh,
                               sph_harm_full_ind_list)
 
 
+def ncoef_from_order(sh_order, sh_basis):
+    """
+    Get the number of SH coefficients up to a given order
+    for a given basis
+
+    Parameters
+    ==========
+    sh_order: int
+        The maximum order of the spherical harmonics basis
+    sh_basis: str
+        Name of the spherical harmonics basis
+    """
+    if '_full' in sh_basis:
+        return (sh_order + 1)**2
+    return 1/2 * (sh_order + 1) * (sh_order + 2)
+
+
 class FiberOrientationDistribution(object):
     def __init__(self, fodf, affine, sh_basis, sh_order):
         """
@@ -26,6 +43,7 @@ class FiberOrientationDistribution(object):
             The maximum order of the SH basis
         """
         self.fodf = fodf
+        self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
         self.affine = affine
         self.sh_basis = sh_basis
         self.sh_order = sh_order
@@ -97,9 +115,16 @@ class FiberOrientationDistribution(object):
                 np.multiply(mean_sf[batch_index[0]:batch_index[0] + dim[0]],
                             1.0 / (sum_of_dot_weights * gauss_weight + 1.0))
 
-        self.fodf =\
+        self.fodf = np.zeros((self.fodf.shape[0],
+                             self.fodf.shape[1],
+                             self.fodf.shape[2],
+                             ncoef_from_order(sh_order,
+                                              sh_basis)),
+                             dtype='float32')
+
+        self.fodf[self.mask] =\
             np.array([sf_to_sh(i, sphere, sh_order, sh_basis) 
-                      for i in mean_sf])
+                      for i in mean_sf])[self.mask]
         self.sh_basis = sh_basis
         self.sh_order = sh_order
 
@@ -161,15 +186,17 @@ class FiberOrientationDistribution(object):
     def clean_false_pos(self, epsilon):
         """
         Remove false positives by forcing to zero values smaller 
-        than epsilon
+        than epsilon and recompute mask
         """
         self.fodf[self.fodf[..., 0] < epsilon] = 0.0
+        self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
 
     
     def extract_peaks(self):
         """
         Extract peaks on FODF without any asumption of symmetry
         """
+
         return 0
 
 
