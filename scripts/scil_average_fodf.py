@@ -26,12 +26,18 @@ def _build_arg_parser():
 
     p.add_argument('input',
                    help='Path to the input fODF file')
-    
+
     p.add_argument('--avfod',
                    help='Output path of averaged fODF')
 
     p.add_argument('--asym_measure',
                    help='Output path of asymmetry measure file')
+
+    p.add_argument('--rm_false_pos',
+                   help='Output path of cleaned fODF file.')
+
+    p.add_argument('--epsilon', default=1e-16, type=float,
+                   help='Float epsilon for remove false positives')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
@@ -52,6 +58,11 @@ def _build_arg_parser():
         help='Size of batches when computing average (at least 3)'
     )
 
+    p.add_argument(
+        '--sigma', default=1.0, type=float,
+        help='Sigma of the gaussian to use'
+    )
+
     add_sh_basis_args(p)
     add_overwrite_arg(p)
 
@@ -68,6 +79,8 @@ def main():
         outputs.append(args.avfod)
     if args.asym_measure:
         outputs.append(args.asym_measure)
+    if args.rm_false_pos:
+        outputs.append(args.rm_false_pos)
     if not outputs:
         parser.error('No output to be done.')
 
@@ -89,11 +102,17 @@ def main():
 
     # Computing neighbors average of fODFs
     t0 = time.perf_counter()
+    if args.rm_false_pos:
+        logging.info('Cleaning FODF')
+        FOD.clean_false_pos(args.epsilon)
+        FOD.save_to_file(args.rm_false_pos)
     if args.avfod:
+        logging.info('Average FODF')
         FOD.average(sphere, dot_sharpness=args.sharpness,
-                    batch_size=args.batch_size)
+                    sigma=args.sigma, batch_size=args.batch_size)
         FOD.save_to_file(args.avfod)
     if args.asym_measure:
+        logging.info('Compute asymmetry measure')
         asym_measure = FOD.compute_asymmetry_measure()
         asym_measure_img = \
             nib.Nifti1Image(asym_measure.astype(np.float32), affine)

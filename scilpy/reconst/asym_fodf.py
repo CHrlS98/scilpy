@@ -32,7 +32,7 @@ class FiberOrientationDistribution(object):
 
 
     def average(self, sphere, sh_order=8, sh_basis='descoteaux07_full',
-                dot_sharpness=1.0, batch_size=10):
+                dot_sharpness=1.0, sigma=1.0, batch_size=10):
         """
         Average the FODF
 
@@ -49,6 +49,8 @@ class FiberOrientationDistribution(object):
         dot_sharpness: float
             Exponent of the dot product. When set to 0.0, directions
             are not weighted by the dot product (default: 1.0)
+        sigma: float
+            Variance of the gaussian (default: 1.0)
         batch_size: int
             Number of volume slices processed at a same time. The
             last batch to be processed can be of a size up to
@@ -68,8 +70,10 @@ class FiberOrientationDistribution(object):
 
         # Prepare batch
         batch_indices = self._get_batches_indices(batch_size)
-        hemis_by_dir, sum_of_weights =\
+        hemis_by_dir, sum_of_dot_weights =\
             self._get_dot_weights(sphere, dot_sharpness)
+        gauss_weights_by_dir, sum_of_gauss_weights =\
+            self._get_gaussian_weights(sigma)
 
         # Compute average in batches
         for batch_index in batch_indices:
@@ -82,14 +86,16 @@ class FiberOrientationDistribution(object):
             for key in hemis_by_dir:
                 direction = np.array([key])
                 hemisphere = hemis_by_dir[key]
+                gauss_weight = gauss_weights_by_dir[key]
+
                 i, j, k = int(key[0] + 1), int(key[1] + 1), int(key[2] + 1)
-                mean_sf[batch_index[0]:batch_index[0] + dim[0]] += \
-                    np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k], 
-                                hemisphere)
+                mean_sf[batch_index[0]:batch_index[0] + dim[0]] += gauss_weight *\
+                        np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k],
+                                    hemisphere)
 
             mean_sf[batch_index[0]:batch_index[0] + dim[0]] = \
                 np.multiply(mean_sf[batch_index[0]:batch_index[0] + dim[0]],
-                            1.0 / (sum_of_weights + 1.0))
+                            1.0 / (sum_of_dot_weights * gauss_weight + 1.0))
 
         self.fodf =\
             np.array([sf_to_sh(i, sphere, sh_order, sh_basis) 
@@ -152,6 +158,21 @@ class FiberOrientationDistribution(object):
         return asymmetry_measure
 
 
+    def clean_false_pos(self, epsilon):
+        """
+        Remove false positives by forcing to zero values smaller 
+        than epsilon
+        """
+        self.fodf[self.fodf[..., 0] < epsilon] = 0.0
+
+    
+    def extract_peaks(self):
+        """
+        Extract peaks on FODF without any asumption of symmetry
+        """
+        return 0
+
+
     def _get_batches_indices(self, batch_size):
         """
         Get the index of slices of data set along the first axis
@@ -182,9 +203,28 @@ class FiberOrientationDistribution(object):
         return split_indices
 
 
+    def _get_directions_to_voxels(self):
+        """
+        Get the vectors to neighboor voxels
+
+        Returns
+        =======
+        directions: array 26x3
+            array of directions from center of voxel to neighboors
+        """
+        # center directions around current voxel
+        directions = np.transpose(np.indices((3, 3, 3)) - np.ones((3, 3, 3)))
+        directions = np.reshape(directions, (27, 3))
+
+        # remove direction (0, 0, 0)
+        directions = np.delete(directions, 13, 0)
+
+        return directions
+
+
     def _get_dot_weights(self, sphere, sharpness):
         """
-        Calculate the dot product (cos(theta))**sharpness between
+        Calculate the dot product (cos(theta)**sharpness) between
         vertices on the sphere and directions to adjacent voxels
 
         Parameters
@@ -202,19 +242,42 @@ class FiberOrientationDistribution(object):
         sum_of_weights: numpy array
             Normalization factor for each averaged direction on the sphere
         """
-        # center directions around current voxel
-        directions = np.transpose(np.indices((3, 3, 3)) - np.ones((3, 3, 3)))
-        directions = np.reshape(directions, (27, 3))
-
-        # remove direction (0, 0, 0)
-        directions = np.delete(directions, 13, 0)
+        directions = self._get_directions_to_voxels()
 
         dir_norm = directions / np.linalg.norm(directions, axis=1, keepdims=True)
         hemispheres = np.dot(sphere.vertices, dir_norm.T)
         hemispheres = np.where(hemispheres > 0.0, hemispheres**sharpness, 0.0)
 
-        keys = list(map(tuple, directions))
-        hemis_by_dir = dict(zip(keys, list(hemispheres.T)))
-        sum_of_weights = np.sum(hemispheres, axis=-1)
+        dir_keys = list(map(tuple, directions))
+        hemis_by_dir = dict(zip(dir_keys, list(hemispheres.T)))
+        sum_of_dot_weights = np.sum(hemispheres, axis=-1)
 
-        return hemis_by_dir, sum_of_weights
+        return hemis_by_dir, sum_of_dot_weights
+
+
+    def _get_gaussian_weights(self, sigma):
+        """
+        Get weights for neighboors using a gaussian of variance sigma
+        (not normalized)
+
+        Parameters
+        ==========
+        sigma: float
+            Variance of the gaussian
+
+        Returns
+        =======
+
+        """
+        directions = self._get_directions_to_voxels()
+        dir_norms = np.linalg.norm(directions, axis=-1, keepdims=True)
+
+        weights = np.exp(-dir_norms**2 / (2 * sigma**2))
+        sum_of_gauss_weights = np.sum(weights)
+
+        dir_keys = list(map(tuple, directions))
+        gaus_weight_by_dir = dict(zip(dir_keys, list(weights)))
+
+        return gaus_weight_by_dir, sum_of_gauss_weights
+
+
