@@ -6,6 +6,9 @@ import nibabel as nib
 
 from dipy.reconst.shm import (sh_to_sf, sf_to_sh,
                               sph_harm_full_ind_list)
+from dipy.core.sphere import HemiSphere
+from dipy.core.ndindex import ndindex
+from dipy.direction.peaks import peak_directions
 
 
 def ncoef_from_order(sh_order, sh_basis):
@@ -50,7 +53,7 @@ class FiberOrientationDistribution(object):
 
 
     def average(self, sphere, sh_order=8, sh_basis='descoteaux07_full',
-                dot_sharpness=1.0, sigma=1.0, batch_size=10):
+                dot_sharpness=1.0, sigma=1.0, batch_size=10, mask=False):
         """
         Average the FODF
 
@@ -73,6 +76,9 @@ class FiberOrientationDistribution(object):
             Number of volume slices processed at a same time. The
             last batch to be processed can be of a size up to
             (batch_size * 2.0 - 1) (default: 10)
+        mask: bool
+            Remove FODF in voxels where there were initially no FODF
+            (default: False)
         """
         # Convert to spherical function
         sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis)
@@ -121,10 +127,15 @@ class FiberOrientationDistribution(object):
                              ncoef_from_order(sh_order,
                                               sh_basis)),
                              dtype='float32')
+        if mask:
+            self.fodf[self.mask] =\
+                np.array([sf_to_sh(i, sphere, sh_order, sh_basis) 
+                        for i in mean_sf])[self.mask]
+        else:
+            self.fodf =\
+                np.array([sf_to_sh(i, sphere, sh_order, sh_basis) 
+                        for i in mean_sf])
 
-        self.fodf[self.mask] =\
-            np.array([sf_to_sh(i, sphere, sh_order, sh_basis) 
-                      for i in mean_sf])[self.mask]
         self.sh_basis = sh_basis
         self.sh_order = sh_order
 
@@ -192,12 +203,35 @@ class FiberOrientationDistribution(object):
         self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
 
     
-    def extract_peaks(self):
+    def extract_peaks(self, sphere, npeaks=5):
         """
         Extract peaks on FODF without any asumption of symmetry
-        """
 
-        return 0
+        Parameters
+        ==========
+        sphere: Sphere
+            sphere to use for peak extraction
+        """
+        sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis) 
+                       for i in self.fodf])
+        #sf = np.reshape(sf, (sf.shape[0]*sf.shape[1]*sf.shape[2], sf.shape[3]))
+        absolute_maximas = np.argmax(sf, axis=-1)
+        maximum_directions = sphere.vertices[absolute_maximas]
+
+        # Divide SF in hemispheres
+        opposite_vertices = self._get_opposite_indices(sphere)
+        mirrored_sf_top, top_hemisphere =\
+            self._mirror_sf_through_plane(sf, sphere, maximum_directions)
+        mirrored_sf_bot, bot_hemisphere =\
+            self._mirror_sf_through_plane(sf, sphere, -maximum_directions)
+
+        peaks_dirs = np.zeros(list(sf.shape[0:3]) + [2*npeaks, 3])
+        for index in ndindex(sf.shape[:-1]):
+            directions, _, _ = peak_directions(sf[index], sphere, is_symmetric=False)
+            n = min(2*npeaks, directions.shape[0])
+            peaks_dirs[index][:n] = directions[:n]
+
+        return peaks_dirs
 
 
     def _get_batches_indices(self, batch_size):
@@ -211,7 +245,7 @@ class FiberOrientationDistribution(object):
         
         Returns
         =======
-        split_indices: list of indices for each batch
+        split_indices: list
             List of indices for each batch
         """
         nb_slices = self.fodf.shape[0]
@@ -308,3 +342,59 @@ class FiberOrientationDistribution(object):
         return gaus_weight_by_dir, sum_of_gauss_weights
 
 
+    def _get_hemisphere_around_dir(self, dir, data, sphere):
+        """
+        Get the indices of vertices on the same hemisphere than dir
+
+        Parameters
+        ==========
+        dir: numpy array(N,3)
+            direction of hemisphere
+        sphere: Sphere
+            sphere to use for hemisphere
+
+        Returns
+        =======
+        indices: array
+            Indices of vertices on hemisphere in direction dir
+        """
+        mask = np.dot(dir, sphere.vertices.T) >= 0
+        hemispheres = []
+        sf_on_hemispheres = []
+        for i in range(mask.shape[0]):
+            verts = sphere.vertices[mask[i]]
+            sf = data[i][mask[i], None]
+            hemispheres.append(HemiSphere(xyz=verts))
+            sf_on_hemispheres.append(sf)
+
+        return hemispheres, sf_on_hemispheres
+
+
+    def _get_opposite_indices(self, sphere):
+        """
+        Get index of opposites vertices for each index on the sphere
+        """
+        return np.array([sphere.find_closest(vertex)
+                        for vertex in -sphere.vertices])
+
+
+    def _mirror_sf_through_plane(self, sf, sphere, normal):
+        """
+        Mirror the spherical function on the sphere through the
+        plane going through the center of the sphere defined by
+        normal by assigning the SF value on a sphere vertice to
+        the sphere opposite vertice
+        """
+        dot_val = np.dot(normal, sphere.vertices.T)
+        n = int(sphere.vertices.shape[0] / 2)
+
+        hemisphere_index = np.argsort(dot_val)[..., n:]
+        opposites = self._get_opposite_indices(sphere)
+        opposites_index =opposites[hemisphere_index]
+
+        mirrored_sf = np.copy(sf)
+        for index in ndindex(mirrored_sf.shape[:-1]):
+            mirrored_sf[index][opposites_index[index]] =\
+                mirrored_sf[index][hemisphere_index[index]]
+
+        return mirrored_sf, hemisphere_index

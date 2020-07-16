@@ -13,6 +13,8 @@ import nibabel as nib
 import numpy as np
 
 from dipy.data import get_sphere
+from dipy.direction.peaks import reshape_peaks_for_visualization
+from fury import window, actor
 
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
@@ -35,6 +37,9 @@ def _build_arg_parser():
 
     p.add_argument('--rm_false_pos',
                    help='Output path of cleaned fODF file.')
+
+    p.add_argument('--peaks',
+                   help='Output path of peak directions file')
 
     p.add_argument('--epsilon', default=1e-16, type=float,
                    help='Float epsilon for remove false positives')
@@ -63,6 +68,11 @@ def _build_arg_parser():
         help='Sigma of the gaussian to use'
     )
 
+    p.add_argument(
+        '--mask', default=False, action='store_true',
+        help='Mask null fodf'
+    )
+
     add_sh_basis_args(p)
     add_overwrite_arg(p)
 
@@ -81,6 +91,8 @@ def main():
         outputs.append(args.asym_measure)
     if args.rm_false_pos:
         outputs.append(args.rm_false_pos)
+    if args.peaks:
+        outputs.append(args.peaks)
     if not outputs:
         parser.error('No output to be done.')
 
@@ -108,8 +120,8 @@ def main():
         FOD.save_to_file(args.rm_false_pos)
     if args.avfod:
         logging.info('Average FODF')
-        FOD.average(sphere, dot_sharpness=args.sharpness,
-                    sigma=args.sigma, batch_size=args.batch_size)
+        FOD.average(sphere, dot_sharpness=args.sharpness,sigma=args.sigma,
+                    batch_size=args.batch_size, mask=args.mask)
         FOD.save_to_file(args.avfod)
     if args.asym_measure:
         logging.info('Compute asymmetry measure')
@@ -117,6 +129,11 @@ def main():
         asym_measure_img = \
             nib.Nifti1Image(asym_measure.astype(np.float32), affine)
         asym_measure_img.to_filename(args.asym_measure)
+    if args.peaks:
+        logging.info('Extract peaks')
+        peaks_dirs = FOD.extract_peaks(sphere)
+        nib.save(nib.Nifti1Image(peaks_dirs,
+                                 affine), args.peaks)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0

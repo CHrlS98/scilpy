@@ -14,6 +14,9 @@ from dipy.reconst.shm import sh_to_sf
 from fury import window, actor
 
 from scilpy.io.utils import (add_sh_basis_args)
+from scilpy.viz.screenshot import (display_scene,
+                                   prepare_texture_slicer_actor,
+                                   crop_data_along_axis)
 
 WINDOW_SIZE=(768, 768)
 
@@ -66,13 +69,6 @@ def _build_arg_parser():
     return p
 
 
-def get_translation_matrix(translation):
-    return np.array([[1.0, 0.0, 0.0, translation[0]], 
-                     [0.0, 1.0, 0.0, translation[1]],
-                     [0.0, 0.0, 1.0, translation[2]],
-                     [0.0, 0.0, 0.0, 1.0]])
-
-
 def prepare_odf_actor(data, sphere, axis_name, scale, radial_scale_off, norm_off):
     odf_actor = actor.odf_slicer(data,
                                  radial_scale=not(radial_scale_off),
@@ -91,135 +87,47 @@ def prepare_odf_actor(data, sphere, axis_name, scale, radial_scale_off, norm_off
     return odf_actor
 
 
-def prepare_slicer_actor(data, min_value, max_value, axis_name):
-    value_range = [data.min(), data.max()]
-    if min_value is not None:
-        value_range[0] = min_value
-    if max_value is not None:
-        value_range[1] = max_value
-    value_range = tuple(value_range)
-
-    if axis_name == 'sagittal':
-        slicer_actor = actor.slicer(data, affine=get_translation_matrix((1.0, 0.0, 0.0)),
-                                    value_range=value_range, interpolation='nearest')
-        slicer_actor.display_extent(0, 0, 0, data.shape[1] - 1, 0, data.shape[2] - 1)
-    elif axis_name == 'coronal':
-        slicer_actor = actor.slicer(data, affine=get_translation_matrix((0.0, -1.0, 0.0)),
-                                    value_range=value_range, interpolation='nearest')
-        slicer_actor.display_extent(0, data.shape[0] - 1, 0, 0, 0, data.shape[2] - 1)
-    elif axis_name == 'axial':
-        slicer_actor = actor.slicer(data, affine=get_translation_matrix((0.0, 0.0, 1.0)),
-                                    value_range=value_range, interpolation='nearest')
-        slicer_actor.display_extent(0, data.shape[0] - 1, 0, data.shape[1] - 1, 0, 0)
-
-    return slicer_actor
-
-
-def prepare_scene(axis_name, shape):
-    if axis_name == 'sagittal':
-        view_position = [-280.0,
-                         (shape[1] - 1) / 2.0,
-                         (shape[2] - 1) / 2.0]
-        view_center = [0.0,
-                       (shape[1] - 1) / 2.0,
-                       (shape[2] - 1) / 2.0]
-        view_up = [0.0, 0.0, 1.0]
-        zoom_factor = 2.0 / shape[1] if shape[1] > shape[2] else 2.0 / shape[2]
-    elif axis_name == 'coronal':
-        view_position = [(shape[0] - 1) / 2.0,
-                         280.0,
-                         (shape[2] - 1) / 2.0]
-        view_center = [(shape[0] - 1) / 2.0,
-                       0.0,
-                       (shape[2] - 1) / 2.0]
-        view_up = [0.0, 0.0, 1.0]
-        zoom_factor = 2.0 / shape[0] if shape[0] > shape[2] else 2.0 / shape[2]
-    elif axis_name == 'axial':
-        view_position = [(shape[0] - 1) / 2.0,
-                         (shape[1] - 1) / 2.0,
-                         -280.0]
-        view_center = [(shape[0] - 1) / 2.0,
-                         (shape[1] - 1) / 2.0,
-                         0.0]
-        view_up = [0.0, 1.0, 0.0]
-        zoom_factor = 2.0 / shape[0] if shape[0] > shape[1] else 2.0 / shape[1]
-
-    scene = window.Scene()
-    scene.projection('parallel')
-    scene.set_camera(position=view_position,
-                     focal_point=view_center,
-                     view_up=view_up)
-    scene.zoom(zoom_factor)
-
-    return scene
-
-
-def display_scene(odf_data, sphere, bg_data, bg_min, bg_max, scale, 
-                  radial_scale_off, norm_off, orientation, interactor, output):
-    scene = prepare_scene(orientation, odf_data.shape)
-
-    # Instanciate ODF slicer actor
-    odf_actor = prepare_odf_actor(odf_data, sphere, orientation, 
-                                  scale, radial_scale_off, norm_off)
-    scene.add(odf_actor)
-
-    # Prepare error map actor if supplied
-    if bg_data is not None:
-        bg_actor = prepare_slicer_actor(bg_data, bg_min, bg_max, orientation)
-        scene.add(bg_actor)
-
-    showm = window.ShowManager(scene, size=WINDOW_SIZE,
-                               title='Visualize SH',
-                               reset_camera=False,
-                               interactor_style=interactor)
-    showm.initialize()
-    showm.start()
-
-    if output:
-        window.snapshot(scene, fname=output, size=WINDOW_SIZE)
-
-
-def crop_data_along_axis(data, idx, axis_name):
-    if axis_name == 'sagittal':
-        return data[idx:idx+1, :, :]
-    elif axis_name == 'coronal':
-        return data[:, idx:idx+1, :]
-    elif axis_name == 'axial':
-        return data[:, :, idx:idx+1]
-
-
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
 
+    sphere = get_sphere(args.sphere)
+
+    actors = []
     fodf_img = nib.nifti1.load(args.input_fodf)
     fodf_data = fodf_img.get_fdata()
-
-    bg_cropped_data = None
-    if args.background:
-        bg_img = nib.nifti1.load(args.background)
-        bg_cropped_data =\
-             crop_data_along_axis(bg_img.get_fdata(), args.slice_index, args.axis_name)
-
     fodf_cropped_data =\
         crop_data_along_axis(fodf_data, args.slice_index, args.axis_name)
-
-    sph_gtab = get_sphere(args.sphere)
     odf_data_sf = sh_to_sf(fodf_cropped_data,
-                           sph_gtab,
+                           sphere,
                            sh_order=args.sh_order,
                            basis_type=args.sh_basis)
 
-    display_scene(odf_data_sf, sph_gtab,
-                  bg_cropped_data,
-                  args.min_value,
-                  args.max_value,
-                  args.scale,
-                  args.radial_scale_off,
-                  args.norm_off,
+    odf_actor = prepare_odf_actor(odf_data_sf, sphere, args.axis_name,
+                                  args.scale, args.radial_scale_off,
+                                  args.norm_off)
+    actors.append(odf_actor)
+
+    if args.background:
+        bg_img = nib.nifti1.load(args.background)
+        bg_cropped_data =\
+             crop_data_along_axis(bg_img.get_fdata(),
+                                  args.slice_index,
+                                  args.axis_name)
+        bg_actor =\
+            prepare_texture_slicer_actor(bg_cropped_data,
+                                 args.min_value,
+                                 args.max_value,
+                                 args.axis_name)
+        actors.append(bg_actor)
+
+    display_scene(actors,
+                  odf_data_sf.shape,
+                  WINDOW_SIZE,
                   args.axis_name,
                   args.interactor,
-                  args.output)
+                  args.output,
+                  'Visualize SH')
 
 
 if __name__ == '__main__':
