@@ -214,16 +214,6 @@ class FiberOrientationDistribution(object):
         """
         sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis) 
                        for i in self.fodf])
-        #sf = np.reshape(sf, (sf.shape[0]*sf.shape[1]*sf.shape[2], sf.shape[3]))
-        absolute_maximas = np.argmax(sf, axis=-1)
-        maximum_directions = sphere.vertices[absolute_maximas]
-
-        # Divide SF in hemispheres
-        opposite_vertices = self._get_opposite_indices(sphere)
-        mirrored_sf_top, top_hemisphere =\
-            self._mirror_sf_through_plane(sf, sphere, maximum_directions)
-        mirrored_sf_bot, bot_hemisphere =\
-            self._mirror_sf_through_plane(sf, sphere, -maximum_directions)
 
         peaks_dirs = np.zeros(list(sf.shape[0:3]) + [2*npeaks, 3])
         for index in ndindex(sf.shape[:-1]):
