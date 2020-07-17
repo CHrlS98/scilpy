@@ -19,7 +19,8 @@ from fury import window, actor
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
 
-from scilpy.reconst.asym_fodf import (FiberOrientationDistribution)
+from scilpy.reconst.asym_utils import (AFiberOrientationDistribution,
+                                       APeaks)
 
 
 def _build_arg_parser():
@@ -27,7 +28,10 @@ def _build_arg_parser():
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
 
     p.add_argument('input',
-                   help='Path to the input fODF file')
+                   help='Path to the input file')
+
+    p.add_argument('input_type', choices={'fodf', 'peaks'},
+                   help='Type of the input')
 
     p.add_argument('--avfod',
                    help='Output path of averaged fODF')
@@ -41,8 +45,11 @@ def _build_arg_parser():
     p.add_argument('--peaks',
                    help='Output path of peak directions file')
 
+    p.add_argument('--labels',
+                   help='Output path of the labeled image')
+
     p.add_argument('--epsilon', default=1e-16, type=float,
-                   help='Float epsilon for remove false positives')
+                   help='Float epsilon for removing false positives')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
@@ -73,6 +80,11 @@ def _build_arg_parser():
         help='Mask null fodf'
     )
 
+    p.add_argument(
+        '--npeaks', default=10, type=int,
+        help='Number of peaks for peak extraction'
+    )
+
     add_sh_basis_args(p)
     add_overwrite_arg(p)
 
@@ -86,13 +98,25 @@ def main():
 
     outputs = []
     if args.avfod:
+        if args.input_type == 'peaks':
+            parser.error('Can\'t compute avfod from peaks file')
         outputs.append(args.avfod)
     if args.asym_measure:
+        if args.input_type == 'peaks':
+            parser.error('Can\'t compute asym measuer from peaks file')
         outputs.append(args.asym_measure)
     if args.rm_false_pos:
+        if args.input_type == 'peaks':
+            parser.error('Can\'t clean fodf from peaks file')
         outputs.append(args.rm_false_pos)
     if args.peaks:
+        if args.input_type == 'peaks':
+            parser.error('Can\'t compute peaks from peaks file')
         outputs.append(args.peaks)
+    if args.labels:
+        if not args.peaks and not args.input_type == 'peaks':
+            parser.error('Can\'t label image without peaks information')
+        outputs.append(args.labels)
     if not outputs:
         parser.error('No output to be done.')
 
@@ -107,10 +131,13 @@ def main():
     img_data = img.get_fdata()
     affine = img.affine
 
-    FOD = FiberOrientationDistribution(img_data,
-                                       affine,
-                                       args.sh_basis,
-                                       args.sh_order)
+    if args.input_type == 'fodf':
+        FOD = AFiberOrientationDistribution(img_data,
+                                            affine,
+                                            args.sh_basis,
+                                            args.sh_order)
+    else:
+        peaks = APeaks(img_data, affine)
 
     # Computing neighbors average of fODFs
     t0 = time.perf_counter()
@@ -131,9 +158,12 @@ def main():
         asym_measure_img.to_filename(args.asym_measure)
     if args.peaks:
         logging.info('Extract peaks')
-        peaks_dirs = FOD.extract_peaks(sphere)
-        nib.save(nib.Nifti1Image(peaks_dirs,
-                                 affine), args.peaks)
+        peaks = FOD.extract_peaks(sphere, args.npeaks)
+        peaks.save_to_file(args.peaks)
+    if args.labels:
+        logging.info('Label intra-voxel configurations')
+        labels = peaks.label_configs()
+        nib.save(nib.Nifti1Image(labels, affine), args.labels)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0

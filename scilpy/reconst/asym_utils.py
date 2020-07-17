@@ -10,6 +10,8 @@ from dipy.core.sphere import HemiSphere
 from dipy.core.ndindex import ndindex
 from dipy.direction.peaks import peak_directions
 
+from sklearn.cluster import KMeans
+
 
 def ncoef_from_order(sh_order, sh_basis):
     """
@@ -28,10 +30,10 @@ def ncoef_from_order(sh_order, sh_basis):
     return 1/2 * (sh_order + 1) * (sh_order + 2)
 
 
-class FiberOrientationDistribution(object):
+class AFiberOrientationDistribution(object):
     def __init__(self, fodf, affine, sh_basis, sh_order):
         """
-        Build the FiberOrientationDistribution object
+        Build the AFiberOrientationDistribution object
 
         Parameters
         ==========
@@ -203,7 +205,7 @@ class FiberOrientationDistribution(object):
         self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
 
     
-    def extract_peaks(self, sphere, npeaks=5):
+    def extract_peaks(self, sphere, npeaks=10):
         """
         Extract peaks on FODF without any asumption of symmetry
 
@@ -215,13 +217,13 @@ class FiberOrientationDistribution(object):
         sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis) 
                        for i in self.fodf])
 
-        peaks_dirs = np.zeros(list(sf.shape[0:3]) + [2*npeaks, 3])
+        peaks_dirs = np.zeros(list(sf.shape[0:3]) + [npeaks, 3])
         for index in ndindex(sf.shape[:-1]):
             directions, _, _ = peak_directions(sf[index], sphere, is_symmetric=False)
-            n = min(2*npeaks, directions.shape[0])
+            n = min(npeaks, directions.shape[0])
             peaks_dirs[index][:n] = directions[:n]
 
-        return peaks_dirs
+        return APeaks(peaks_dirs, self.affine)
 
 
     def _get_batches_indices(self, batch_size):
@@ -360,31 +362,64 @@ class FiberOrientationDistribution(object):
         return hemispheres, sf_on_hemispheres
 
 
-    def _get_opposite_indices(self, sphere):
+class APeaks(object):
+    def __init__(self, data, affine):
         """
-        Get index of opposites vertices for each index on the sphere
+        Build the APeaks object representing peaks
+        extracted from asymmetric FODF
         """
-        return np.array([sphere.find_closest(vertex)
-                        for vertex in -sphere.vertices])
+        self.peaks = data
+        self.affine = affine
+        self.npeaks = data.shape[-2]
+        self.peaks_count = np.cumsum(\
+            np.linalg.norm(self.peaks, axis=-1) > 0., axis=-1)[..., -1]
 
 
-    def _mirror_sf_through_plane(self, sf, sphere, normal):
+    def save_to_file(self, filename):
         """
-        Mirror the spherical function on the sphere through the
-        plane going through the center of the sphere defined by
-        normal by assigning the SF value on a sphere vertice to
-        the sphere opposite vertice
+        Save peaks to file 'filename'
         """
-        dot_val = np.dot(normal, sphere.vertices.T)
-        n = int(sphere.vertices.shape[0] / 2)
+        nib.save(nib.Nifti1Image(self.peaks, self.affine), filename)
 
-        hemisphere_index = np.argsort(dot_val)[..., n:]
-        opposites = self._get_opposite_indices(sphere)
-        opposites_index =opposites[hemisphere_index]
+    
+    def label_configs(self, tol_in_degrees=5.0):
+        """
+        Classify intra-voxel configurations
+        """
+        labels = np.zeros_like(self.peaks_count)
+        two_peaks_mask = self.peaks_count == 2
+        two_peaks = self.peaks[two_peaks_mask, :2]
+        cos_theta = np.zeros(two_peaks.shape[0])
+        for index in range(two_peaks.shape[0]):
+            cos_theta[index] =\
+                np.dot(two_peaks[index][0], two_peaks[index][1].T)
 
-        mirrored_sf = np.copy(sf)
-        for index in ndindex(mirrored_sf.shape[:-1]):
-            mirrored_sf[index][opposites_index[index]] =\
-                mirrored_sf[index][hemisphere_index[index]]
+        labels[self.peaks_count == 1] = 1
+        labels[two_peaks_mask] =\
+            (cos_theta > np.cos((180.0 - 5.0) / 180.0 * np.pi)) * 2
+        labels[self.peaks_count == 3] = 3
 
-        return mirrored_sf, hemisphere_index
+        """
+        if max_npeaks == None:
+            npeaks = self.npeaks
+        else:
+            npeaks=min(max_npeaks, self.npeaks)
+
+        X = np.zeros(np.append(self.peaks.shape[:-2], npeaks), dtype='float32')
+        for index in ndindex(X.shape[:-1]):
+            dot = np.dot(self.peaks[index][0],
+                         self.peaks[index][:npeaks].T)
+            X[index] = np.reshape(dot, npeaks)
+
+        X = np.reshape(X, (X.shape[0] * X.shape[1] * X.shape[2], X.shape[-1]))
+
+        kmeans = KMeans(n_clusters=n_clusters).fit(X)
+        labels = kmeans.labels_
+        labels = np.reshape(labels, (self.peaks.shape[:-2]))
+        """
+
+        return labels
+
+
+
+
