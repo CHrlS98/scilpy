@@ -3,14 +3,13 @@
 import logging
 import numpy as np
 import nibabel as nib
+import matplotlib.pyplot as plt
 
 from dipy.reconst.shm import (sh_to_sf, sf_to_sh,
                               sph_harm_full_ind_list)
 from dipy.core.sphere import HemiSphere
 from dipy.core.ndindex import ndindex
 from dipy.direction.peaks import peak_directions
-
-from sklearn.cluster import KMeans
 
 
 def ncoef_from_order(sh_order, sh_basis):
@@ -53,7 +52,6 @@ class AFiberOrientationDistribution(object):
         self.sh_basis = sh_basis
         self.sh_order = sh_order
 
-
     def average(self, sphere, sh_order=8, sh_basis='descoteaux07_full',
                 dot_sharpness=1.0, sigma=1.0, batch_size=10, mask=False):
         """
@@ -91,7 +89,7 @@ class AFiberOrientationDistribution(object):
         mean_sf = np.copy(sf)
 
         # Zero pad sf data
-        sf = np.pad(sf, ((1, 1),(1, 1),(1, 1),(0, 0)),
+        sf = np.pad(sf, ((1, 1), (1, 1), (1, 1), (0, 0)),
                     mode='constant', constant_values=0.0)
 
         # Prepare batch
@@ -104,9 +102,9 @@ class AFiberOrientationDistribution(object):
         # Compute average in batches
         for batch_index in batch_indices:
             batch = sf[batch_index]
-            dim = (batch.shape[0] - 2, 
+            dim = (batch.shape[0] - 2,
                    batch.shape[1] - 2,
-                   batch.shape[2] - 2, 
+                   batch.shape[2] - 2,
                    batch.shape[3])
 
             for key in hemis_by_dir:
@@ -115,9 +113,10 @@ class AFiberOrientationDistribution(object):
                 gauss_weight = gauss_weights_by_dir[key]
 
                 i, j, k = int(key[0] + 1), int(key[1] + 1), int(key[2] + 1)
-                mean_sf[batch_index[0]:batch_index[0] + dim[0]] += gauss_weight *\
-                        np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k],
-                                    hemisphere)
+                mean_sf[batch_index[0]:batch_index[0] + dim[0]] +=\
+                    gauss_weight * np.multiply(
+                        batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k],
+                        hemisphere)
 
             mean_sf[batch_index[0]:batch_index[0] + dim[0]] = \
                 np.multiply(mean_sf[batch_index[0]:batch_index[0] + dim[0]],
@@ -131,16 +130,15 @@ class AFiberOrientationDistribution(object):
                              dtype='float32')
         if mask:
             self.fodf[self.mask] =\
-                np.array([sf_to_sh(i, sphere, sh_order, sh_basis) 
-                        for i in mean_sf])[self.mask]
+                np.array([sf_to_sh(i, sphere, sh_order, sh_basis)
+                          for i in mean_sf])[self.mask]
         else:
             self.fodf =\
-                np.array([sf_to_sh(i, sphere, sh_order, sh_basis) 
-                        for i in mean_sf])
+                np.array([sf_to_sh(i, sphere, sh_order, sh_basis)
+                          for i in mean_sf])
 
         self.sh_basis = sh_basis
         self.sh_order = sh_order
-
 
     def save_to_file(self, filename):
         """
@@ -154,7 +152,6 @@ class AFiberOrientationDistribution(object):
         image = nib.Nifti1Image(self.fodf.astype(np.float32), self.affine)
         image.to_filename(filename)
 
-
     def normalize_by_voxel(self):
         """
         Perform voxel-wise normalization of FODF (in place)
@@ -163,48 +160,61 @@ class AFiberOrientationDistribution(object):
         normalized_sh = np.zeros_like(self.fodf)
         mask = norm > 0
         masked_norm = np.reshape(norm[mask],
-                                (norm[mask].shape[0], 1))
+                                 (norm[mask].shape[0], 1))
         normalized_sh[mask] = self.fodf[mask] / masked_norm
 
         self.fodf = normalized_sh
 
-
     def compute_asymmetry_measure(self):
         """
         Measure the asymmetry of the FODF per voxel.
+
+        Returns
+        =======
+        asym_measure: numpy array
+            array containing the asymmetry measure of each voxel
+        asym_thresholds: numpy array
+            range of thresholds used to compute ``asym_ratios``
+        asym_ratios: numpy array
+            ratios of voxels of asymmetry above threshold for each
+            threshold in ``thresholds``
 
         Note
         ====
         The asymmetry measure corresponds to the ratio of the norm of odd
         order SH coefficients on the norm of full order SH order coefficients
         """
-        if not '_full' in self.sh_basis:
-            logging.error('Can\'t compute asymmetry measure ' +\
+        if '_full' not in self.sh_basis:
+            logging.error('Can\'t compute asymmetry measure ' +
                           'from symmetric SH basis')
             import sys
             sys.exit('Aborting program')
 
         _, l_list = sph_harm_full_ind_list(self.sh_order)
-        odd_order_coeffs = self.fodf[..., l_list % 2==1]
+        odd_order_coeffs = self.fodf[..., l_list % 2 == 1]
         odd_order_norms = np.linalg.norm(odd_order_coeffs, axis=-1)
         full_norms = np.linalg.norm(self.fodf, axis=-1)
-        
+
         asymmetry_measure = np.zeros_like(full_norms)
         mask = full_norms > 0
 
         asymmetry_measure[mask] = odd_order_norms[mask] / full_norms[mask]
-        return asymmetry_measure
+        asym_thresholds = np.arange(0.0, 1.0, 0.001)
+        asym_ratios = np.array(
+            [np.count_nonzero(asymmetry_measure[self.mask] > dat)
+             for dat in asym_thresholds])
+        asym_ratios = asym_ratios / asymmetry_measure[self.mask].size
 
+        return asymmetry_measure, asym_thresholds, asym_ratios
 
     def clean_false_pos(self, epsilon):
         """
-        Remove false positives by forcing to zero values smaller 
+        Remove false positives by forcing to zero values smaller
         than epsilon and recompute mask
         """
         self.fodf[self.fodf[..., 0] < epsilon] = 0.0
         self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
 
-    
     def extract_peaks(self, sphere, npeaks=10):
         """
         Extract peaks on FODF without any asumption of symmetry
@@ -214,17 +224,17 @@ class AFiberOrientationDistribution(object):
         sphere: Sphere
             sphere to use for peak extraction
         """
-        sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis) 
+        sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis)
                        for i in self.fodf])
 
         peaks_dirs = np.zeros(list(sf.shape[0:3]) + [npeaks, 3])
         for index in ndindex(sf.shape[:-1]):
-            directions, _, _ = peak_directions(sf[index], sphere, is_symmetric=False)
+            directions, _, _ =\
+                peak_directions(sf[index], sphere, is_symmetric=False)
             n = min(npeaks, directions.shape[0])
             peaks_dirs[index][:n] = directions[:n]
 
         return APeaks(peaks_dirs, self.affine)
-
 
     def _get_batches_indices(self, batch_size):
         """
@@ -234,7 +244,7 @@ class AFiberOrientationDistribution(object):
         ==========
         batch_size: int
             Number of slices per batch
-        
+
         Returns
         =======
         split_indices: list
@@ -255,7 +265,6 @@ class AFiberOrientationDistribution(object):
 
         return split_indices
 
-
     def _get_directions_to_voxels(self):
         """
         Get the vectors to neighboor voxels
@@ -273,7 +282,6 @@ class AFiberOrientationDistribution(object):
         directions = np.delete(directions, 13, 0)
 
         return directions
-
 
     def _get_dot_weights(self, sphere, sharpness):
         """
@@ -297,7 +305,8 @@ class AFiberOrientationDistribution(object):
         """
         directions = self._get_directions_to_voxels()
 
-        dir_norm = directions / np.linalg.norm(directions, axis=1, keepdims=True)
+        dir_norm =\
+            directions / np.linalg.norm(directions, axis=1, keepdims=True)
         hemispheres = np.dot(sphere.vertices, dir_norm.T)
         hemispheres = np.where(hemispheres > 0.0, hemispheres**sharpness, 0.0)
 
@@ -306,7 +315,6 @@ class AFiberOrientationDistribution(object):
         sum_of_dot_weights = np.sum(hemispheres, axis=-1)
 
         return hemis_by_dir, sum_of_dot_weights
-
 
     def _get_gaussian_weights(self, sigma):
         """
@@ -332,7 +340,6 @@ class AFiberOrientationDistribution(object):
         gaus_weight_by_dir = dict(zip(dir_keys, list(weights)))
 
         return gaus_weight_by_dir, sum_of_gauss_weights
-
 
     def _get_hemisphere_around_dir(self, dir, data, sphere):
         """
@@ -371,9 +378,8 @@ class APeaks(object):
         self.peaks = data
         self.affine = affine
         self.npeaks = data.shape[-2]
-        self.peaks_count = np.cumsum(\
+        self.peaks_count = np.cumsum(
             np.linalg.norm(self.peaks, axis=-1) > 0., axis=-1)[..., -1]
-
 
     def save_to_file(self, filename):
         """
@@ -381,12 +387,11 @@ class APeaks(object):
         """
         nib.save(nib.Nifti1Image(self.peaks, self.affine), filename)
 
-    
     def label_configs(self, tol_in_degrees=5.0):
         """
         Classify intra-voxel configurations
         """
-        labels = np.zeros_like(self.peaks_count)
+        labels = np.zeros_like(self.peaks_count, dtype='int32')
         two_peaks_mask = self.peaks_count == 2
         two_peaks = self.peaks[two_peaks_mask, :2]
         cos_theta = np.zeros(two_peaks.shape[0])
@@ -399,27 +404,4 @@ class APeaks(object):
             (cos_theta > np.cos((180.0 - 5.0) / 180.0 * np.pi)) * 2
         labels[self.peaks_count == 3] = 3
 
-        """
-        if max_npeaks == None:
-            npeaks = self.npeaks
-        else:
-            npeaks=min(max_npeaks, self.npeaks)
-
-        X = np.zeros(np.append(self.peaks.shape[:-2], npeaks), dtype='float32')
-        for index in ndindex(X.shape[:-1]):
-            dot = np.dot(self.peaks[index][0],
-                         self.peaks[index][:npeaks].T)
-            X[index] = np.reshape(dot, npeaks)
-
-        X = np.reshape(X, (X.shape[0] * X.shape[1] * X.shape[2], X.shape[-1]))
-
-        kmeans = KMeans(n_clusters=n_clusters).fit(X)
-        labels = kmeans.labels_
-        labels = np.reshape(labels, (self.peaks.shape[:-2]))
-        """
-
         return labels
-
-
-
-

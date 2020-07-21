@@ -11,10 +11,10 @@ import logging
 
 import nibabel as nib
 import numpy as np
+import matplotlib.pyplot as plt
 
 from dipy.data import get_sphere
 from dipy.direction.peaks import reshape_peaks_for_visualization
-from fury import window, actor
 
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
@@ -147,15 +147,21 @@ def main():
         FOD.save_to_file(args.rm_false_pos)
     if args.avfod:
         logging.info('Average FODF')
-        FOD.average(sphere, dot_sharpness=args.sharpness,sigma=args.sigma,
+        FOD.average(sphere, dot_sharpness=args.sharpness, sigma=args.sigma,
                     batch_size=args.batch_size, mask=args.mask)
         FOD.save_to_file(args.avfod)
     if args.asym_measure:
         logging.info('Compute asymmetry measure')
-        asym_measure = FOD.compute_asymmetry_measure()
-        asym_measure_img = \
-            nib.Nifti1Image(asym_measure.astype(np.float32), affine)
-        asym_measure_img.to_filename(args.asym_measure)
+        asym_measure, asym_thresholds, asym_ratios =\
+            FOD.compute_asymmetry_measure()
+        nib.save(nib.Nifti1Image(asym_measure.astype(np.float32), affine),
+                 args.asym_measure)
+        plt.plot(asym_thresholds, asym_ratios)
+        plt.ylabel('Proportion of asymmetric voxels')
+        plt.xlabel('Asymmetry measure threshold')
+        plt.title('Proportion of voxels of asymmetry higher than a threshold')
+        plt.grid(True)
+        plt.savefig('asym_ratios')
     if args.peaks:
         logging.info('Extract peaks')
         peaks = FOD.extract_peaks(sphere, args.npeaks)
