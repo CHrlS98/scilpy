@@ -545,7 +545,7 @@ class AFODMetricsPopper(object):
         norm of full order SH order coefficients per voxel
         """
         if self.aFOD:
-            self.odd_on_full_coeffs_ratio[mask] =\
+            self.odd_on_full_coeffs_ratio =\
                 self.aFOD.compute_odd_on_full_coeffs_ratio()
         else:
             logger.warning('No FODF supplied for computing\
