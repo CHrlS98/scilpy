@@ -546,7 +546,7 @@ class AFODMetricsPopper(object):
         """
         if self.aFOD:
             self.odd_on_full_coeffs_ratio[mask] =\
-                self.aFOD.odd_on_full_coeffs_ratio()
+                self.aFOD.compute_odd_on_full_coeffs_ratio()
         else:
             logger.warning('No FODF supplied for computing\
                             odd/full coefficients ratio')
