@@ -87,6 +87,8 @@ def main():
     assert_inputs_exist(parser, inputs)
     assert_outputs_exist(parser, args, outputs, check_dir_exists=True)
 
+    FOD = None
+    peaks = None
     if args.in_fodf:
         fodf_img = nib.nifti1.load(args.in_fodf)
         fodf_data = fodf_img.get_fdata()
