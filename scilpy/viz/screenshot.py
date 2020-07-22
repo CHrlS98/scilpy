@@ -48,7 +48,7 @@ def prepare_scene(axis_name, shape):
         view_position = [-280.0,
                          (shape[1] - 1) / 2.0,
                          (shape[2] - 1) / 2.0]
-        view_center = [0.0,
+        view_center = [(shape[0] - 1) / 2.0,
                        (shape[1] - 1) / 2.0,
                        (shape[2] - 1) / 2.0]
         view_up = [0.0, 0.0, 1.0]
@@ -58,7 +58,7 @@ def prepare_scene(axis_name, shape):
                          280.0,
                          (shape[2] - 1) / 2.0]
         view_center = [(shape[0] - 1) / 2.0,
-                       0.0,
+                       (shape[1] - 1) / 2.0,
                        (shape[2] - 1) / 2.0]
         view_up = [0.0, 0.0, 1.0]
         zoom_factor = 2.0 / shape[0] if shape[0] > shape[2] else 2.0 / shape[2]
@@ -67,8 +67,8 @@ def prepare_scene(axis_name, shape):
                          (shape[1] - 1) / 2.0,
                          -280.0]
         view_center = [(shape[0] - 1) / 2.0,
-                         (shape[1] - 1) / 2.0,
-                         0.0]
+                       (shape[1] - 1) / 2.0,
+                       (shape[2] - 1) / 2.0]
         view_up = [0.0, 1.0, 0.0]
         zoom_factor = 2.0 / shape[0] if shape[0] > shape[1] else 2.0 / shape[1]
 

@@ -30,23 +30,14 @@ def _build_arg_parser():
     p.add_argument('input',
                    help='Path to the input file')
 
-    p.add_argument('input_type', choices={'fodf', 'peaks'},
-                   help='Type of the input')
-
-    p.add_argument('--avfod',
+    p.add_argument('--avfodf',
                    help='Output path of averaged fODF')
-
-    p.add_argument('--asym_measure',
-                   help='Output path of asymmetry measure file')
 
     p.add_argument('--rm_false_pos',
                    help='Output path of cleaned fODF file.')
 
     p.add_argument('--peaks',
                    help='Output path of peak directions file')
-
-    p.add_argument('--labels',
-                   help='Output path of the labeled image')
 
     p.add_argument('--epsilon', default=1e-16, type=float,
                    help='Float epsilon for removing false positives')
@@ -97,26 +88,12 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     outputs = []
-    if args.avfod:
-        if args.input_type == 'peaks':
-            parser.error('Can\'t compute avfod from peaks file')
-        outputs.append(args.avfod)
-    if args.asym_measure:
-        if args.input_type == 'peaks':
-            parser.error('Can\'t compute asym measuer from peaks file')
-        outputs.append(args.asym_measure)
+    if args.avfodf:
+        outputs.append(args.avfodf)
     if args.rm_false_pos:
-        if args.input_type == 'peaks':
-            parser.error('Can\'t clean fodf from peaks file')
         outputs.append(args.rm_false_pos)
     if args.peaks:
-        if args.input_type == 'peaks':
-            parser.error('Can\'t compute peaks from peaks file')
         outputs.append(args.peaks)
-    if args.labels:
-        if not args.peaks and not args.input_type == 'peaks':
-            parser.error('Can\'t label image without peaks information')
-        outputs.append(args.labels)
     if not outputs:
         parser.error('No output to be done.')
 
@@ -131,13 +108,10 @@ def main():
     img_data = img.get_fdata()
     affine = img.affine
 
-    if args.input_type == 'fodf':
-        FOD = AFiberOrientationDistribution(img_data,
-                                            affine,
-                                            args.sh_basis,
-                                            args.sh_order)
-    else:
-        peaks = APeaks(img_data, affine)
+    FOD = AFiberOrientationDistribution(img_data,
+                                        affine,
+                                        args.sh_basis,
+                                        args.sh_order)
 
     # Computing neighbors average of fODFs
     t0 = time.perf_counter()
@@ -145,31 +119,15 @@ def main():
         logging.info('Cleaning FODF')
         FOD.clean_false_pos(args.epsilon)
         FOD.save_to_file(args.rm_false_pos)
-    if args.avfod:
+    if args.avfodf:
         logging.info('Average FODF')
         FOD.average(sphere, dot_sharpness=args.sharpness, sigma=args.sigma,
                     batch_size=args.batch_size, mask=args.mask)
-        FOD.save_to_file(args.avfod)
-    if args.asym_measure:
-        logging.info('Compute asymmetry measure')
-        asym_measure, asym_thresholds, asym_ratios =\
-            FOD.compute_asymmetry_measure()
-        nib.save(nib.Nifti1Image(asym_measure.astype(np.float32), affine),
-                 args.asym_measure)
-        plt.plot(asym_thresholds, asym_ratios)
-        plt.ylabel('Proportion of asymmetric voxels')
-        plt.xlabel('Asymmetry measure threshold')
-        plt.title('Proportion of voxels of asymmetry higher than a threshold')
-        plt.grid(True)
-        plt.savefig('asym_ratios')
+        FOD.save_to_file(args.avfodf)
     if args.peaks:
         logging.info('Extract peaks')
         peaks = FOD.extract_peaks(sphere, args.npeaks)
         peaks.save_to_file(args.peaks)
-    if args.labels:
-        logging.info('Label intra-voxel configurations')
-        labels = peaks.label_configs()
-        nib.save(nib.Nifti1Image(labels, affine), args.labels)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0

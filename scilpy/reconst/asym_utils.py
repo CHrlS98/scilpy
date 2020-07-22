@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 from dipy.reconst.shm import (sh_to_sf, sf_to_sh,
                               sph_harm_full_ind_list)
-from dipy.core.sphere import HemiSphere
+from dipy.core.sphere import HemiSphere, Sphere, hemi_icosahedron
 from dipy.core.ndindex import ndindex
 from dipy.direction.peaks import peak_directions
 
@@ -51,6 +51,21 @@ class AFiberOrientationDistribution(object):
         self.affine = affine
         self.sh_basis = sh_basis
         self.sh_order = sh_order
+
+    def get_fodf(self):
+        return self.fodf
+
+    def get_mask(self):
+        return self.mask
+
+    def get_affine(self):
+        return self.affine
+
+    def get_sh_basis(self):
+        return self.sh_basis
+
+    def get_sh_order(self):
+        return self.sh_order
 
     def average(self, sphere, sh_order=8, sh_basis='descoteaux07_full',
                 dot_sharpness=1.0, sigma=1.0, batch_size=10, mask=False):
@@ -165,7 +180,7 @@ class AFiberOrientationDistribution(object):
 
         self.fodf = normalized_sh
 
-    def compute_asymmetry_measure(self):
+    def compute_odd_on_full_coeffs_ratio(self):
         """
         Measure the asymmetry of the FODF per voxel.
 
@@ -173,11 +188,6 @@ class AFiberOrientationDistribution(object):
         =======
         asym_measure: numpy array
             array containing the asymmetry measure of each voxel
-        asym_thresholds: numpy array
-            range of thresholds used to compute ``asym_ratios``
-        asym_ratios: numpy array
-            ratios of voxels of asymmetry above threshold for each
-            threshold in ``thresholds``
 
         Note
         ====
@@ -199,13 +209,31 @@ class AFiberOrientationDistribution(object):
         mask = full_norms > 0
 
         asymmetry_measure[mask] = odd_order_norms[mask] / full_norms[mask]
-        asym_thresholds = np.arange(0.0, 1.0, 0.001)
-        asym_ratios = np.array(
-            [np.count_nonzero(asymmetry_measure[self.mask] > dat)
-             for dat in asym_thresholds])
-        asym_ratios = asym_ratios / asymmetry_measure[self.mask].size
 
-        return asymmetry_measure, asym_thresholds, asym_ratios
+        return asymmetry_measure
+
+    def compute_mean_antipodal_distance(self, lod=2):
+        """
+        Compute the normalized distance between a vertex and its antipod
+        """
+        hemisphere = hemi_icosahedron.subdivide(lod)
+        n_pts_per_hemisphere = hemisphere.vertices.shape[0]
+        sphere =\
+            Sphere(xyz=np.vstack((hemisphere.vertices, -hemisphere.vertices)))
+        verts = np.arange(n_pts_per_hemisphere)
+        inv_verts = np.arange(n_pts_per_hemisphere, sphere.vertices.shape[0])
+
+        sf = np.array([sh_to_sf(fodf, sphere, self.sh_order, self.sh_basis)
+                       for fodf in self.fodf])
+        sf = np.array([sf[..., verts], sf[..., inv_verts]])
+        sf[sf < 0] = 0
+
+        d = np.abs(sf[0] - sf[1])
+        max_sf = np.max(sf, axis=0)
+        d[np.nonzero(max_sf)] =\
+            d[np.nonzero(max_sf)] / max_sf[np.nonzero(max_sf)]
+
+        return np.sum(d, axis=-1) / n_pts_per_hemisphere
 
     def clean_false_pos(self, epsilon):
         """
@@ -341,6 +369,29 @@ class AFiberOrientationDistribution(object):
 
         return gaus_weight_by_dir, sum_of_gauss_weights
 
+    def _get_ratio_asym_on_total_voxels(self, asym_measure):
+        """
+        Get the proportion of asymmetric voxels in the data set for
+        different asymmetry thresholds
+
+        Parameters
+        ----------
+        asym_measure: numpy array
+            array containing voxel asymmetry measure (in range [0, 1])
+
+        Returns
+        -------
+        ratios : numpy array(2, N)
+            pairs of threshold-ratio for equally spaced threshold values
+        """
+        asym_thresholds = np.arange(0.0, 1.0, 0.001)
+        asym_ratios = np.array(
+            [np.count_nonzero(asym_measure[self.mask] > dat)
+             for dat in asym_thresholds])
+        asym_ratios = asym_ratios / asym_measure[self.mask].size
+
+        return np.array([asym_thresholds, asym_ratios])
+
     def _get_hemisphere_around_dir(self, dir, data, sphere):
         """
         Get the indices of vertices on the same hemisphere than dir
@@ -378,8 +429,25 @@ class APeaks(object):
         self.peaks = data
         self.affine = affine
         self.npeaks = data.shape[-2]
-        self.peaks_count = np.cumsum(
-            np.linalg.norm(self.peaks, axis=-1) > 0., axis=-1)[..., -1]
+        self.peaks_count =\
+            np.cumsum(np.linalg.norm(self.peaks, axis=-1) > 0.,
+                      axis=-1)[..., -1]
+        self.labels = None
+
+    def get_peaks(self):
+        return self.peaks
+
+    def get_affine(self):
+        return self.affine
+
+    def get_npeaks(self):
+        return self.npeaks
+
+    def get_peaks_count(self):
+        return self.peaks_count
+
+    def get_labels(self):
+        return self.labels
 
     def save_to_file(self, filename):
         """
@@ -390,18 +458,142 @@ class APeaks(object):
     def label_configs(self, tol_in_degrees=5.0):
         """
         Classify intra-voxel configurations
+
+        Parameters
+        ----------
+        tol_in_degrees: float
+            tolerance in degrees for angle between peaks in straight fibers
         """
         labels = np.zeros_like(self.peaks_count, dtype='int32')
-        two_peaks_mask = self.peaks_count == 2
-        two_peaks = self.peaks[two_peaks_mask, :2]
+        two_peaks = self.peaks[self.peaks_count == 2, :2]
         cos_theta = np.zeros(two_peaks.shape[0])
         for index in range(two_peaks.shape[0]):
             cos_theta[index] =\
                 np.dot(two_peaks[index][0], two_peaks[index][1].T)
 
+        # half-orientations are labelled '1'
         labels[self.peaks_count == 1] = 1
-        labels[two_peaks_mask] =\
-            (cos_theta > np.cos((180.0 - 5.0) / 180.0 * np.pi)) * 2
-        labels[self.peaks_count == 3] = 3
+        # straight single fiber orientations are labelled '2' whereas
+        # bending single fiber orientations are labelled '3'
+        labels[self.peaks_count == 2] =\
+            (cos_theta > np.cos((180.0 - tol_in_degrees) / 180.0 * np.pi)) + 1
+        # 3-directions FODF (such as 'T''s ans 'Y''s) are labelled '4'
+        labels[self.peaks_count == 3] = 4
+        # symmetric 2-fibers crossings ('X''s) are labeled '5'
+        # symmetric 3-fibers crossings are labeled '6'
+        # other complex fiber orientations are labeled '7'
 
-        return labels
+        self.labels = labels
+
+
+class AFODMetricsPopper(object):
+    def __init__(self, aFOD, aPeaks):
+        """
+        Build the AFODMetricsPopper object
+
+        The AFODMetricsPopper is a class containing metrics with
+        respect to asymmetric fiber orientation distribution functions
+        """
+        self.aFOD = aFOD
+        self.aPeaks = aPeaks
+        self.odd_on_full_coeffs_ratio = None
+        self.mean_antipodal_distance = None
+        self.labels = None
+
+    def save_odf_on_full_coeffs_ratio(self, filename):
+        """
+        Save odd on full coefficients ratios to file ``filename``
+
+        Parameters
+        ----------
+        filename: str
+            Name of the file to save
+        """
+        if self.odd_on_full_coeffs_ratio is not None:
+            nib.Nifti1Image(self.odd_on_full_coeffs_ratio.astype(np.float32),
+                            self.aFOD.get_affine()).to_filename(filename)
+
+    def save_mean_antipodal_distance(self, filename):
+        """
+        Save mean antipodal distances to file ``filename``
+
+        Parameters
+        ----------
+        filename: str
+            Name of the file to save
+        """
+        if self.mean_antipodal_distance is not None:
+            nib.Nifti1Image(self.mean_antipodal_distance.astype(np.float32),
+                            self.aFOD.get_affine()).to_filename(filename)
+
+    def save_fiber_config_labels(self, filename):
+        """
+        Save fiber configurations labels to file ``filename``
+
+        Parameters
+        ----------
+        filename: str
+            Name of the file to save
+        """
+        if self.labels is not None:
+            nib.Nifti1Image(self.labels.astype(np.float32),
+                            self.aFOD.get_affine()).to_filename(filename)
+
+    def compute_odd_on_full_coeffs_ratio(self):
+        """
+        Compute the ratio of the norm of odd order SH coefficients on the
+        norm of full order SH order coefficients per voxel
+        """
+        if self.aFOD:
+            self.odd_on_full_coeffs_ratio[mask] =\
+                self.aFOD.odd_on_full_coeffs_ratio()
+        else:
+            logger.warning('No FODF supplied for computing\
+                            odd/full coefficients ratio')
+
+    def compute_mean_antipodal_distance(self, precision=2):
+        """
+        Compute the normalized distance between a vertex and its antipod
+
+        Parameters
+        ----------
+        precision: int
+            number of subdivisions of the icosahedron used for estimating SF
+        """
+        if self.aFOD:
+            self.mean_antipodal_distance =\
+                self.aFOD.compute_mean_antipodal_distance(precision)
+        else:
+            logger.warning('No FODF supplied for computing\
+                            mean antipodal distance')
+
+    def compute_voxel_configs_labels_map(self, mad_th=0.2):
+        """
+        Label configuration of fiber orientations for each voxel
+
+        Parameters
+        ----------
+        mad_th: float
+            threshold applied on mean antipodal symmetry map to
+            classify FODF as symmetric or not
+        """
+        peaks_count = self.aPeaks.get_peaks_count()
+        mad = self.mean_antipodal_distance
+        labels = np.zeros_like(peaks_count, dtype='int32')
+
+        # half-orientations are labelled '1'
+        labels[peaks_count == 1] = 1
+        # straight single fiber orientations are labelled '2' whereas
+        # bending single fiber orientations are labelled '3'
+        labels[np.logical_and(peaks_count == 2, mad < mad_th)] = 2
+        labels[np.logical_and(peaks_count == 2, mad > mad_th)] = 3
+        # 3-directions FODF (such as 'T''s ans 'Y''s) are labelled '4'
+        labels[peaks_count == 3] = 4
+        # symmetric 2-fibers crossings ('X''s) are labeled '5'
+        labels[np.logical_and(peaks_count == 4, mad < mad_th)] = 5
+        # symmetric 3-fibers crossings are labeled '6'
+        labels[np.logical_and(peaks_count == 6, mad < mad_th)] = 6
+        # other complex fiber orientations are labeled '7'
+        labels[np.logical_and(labels == 0, peaks_count > 0)] = 7
+
+        self.labels = labels
