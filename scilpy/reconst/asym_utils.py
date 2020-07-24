@@ -52,20 +52,8 @@ class AFiberOrientationDistribution(object):
         self.sh_basis = sh_basis
         self.sh_order = sh_order
 
-    def get_fodf(self):
-        return self.fodf
-
-    def get_mask(self):
-        return self.mask
-
     def get_affine(self):
         return self.affine
-
-    def get_sh_basis(self):
-        return self.sh_basis
-
-    def get_sh_order(self):
-        return self.sh_order
 
     def average(self, sphere, sh_order=8, sh_basis='descoteaux07_full',
                 dot_sharpness=1.0, sigma=1.0, batch_size=10, mask=False):
@@ -109,40 +97,43 @@ class AFiberOrientationDistribution(object):
 
         # Prepare batch
         batch_indices = self._get_batches_indices(batch_size)
-        hemis_by_dir, sum_of_dot_weights =\
-            self._get_dot_weights(sphere, dot_sharpness)
-        gauss_weights_by_dir, sum_of_gauss_weights =\
-            self._get_gaussian_weights(sigma)
+        w_by_dir, norm_w = self._get_weights(sphere, dot_sharpness, sigma)
 
         # Compute average in batches
-        for batch_index in batch_indices:
-            batch = sf[batch_index]
+        for index in batch_indices:
+            batch = sf[index]
             dim = (batch.shape[0] - 2,
                    batch.shape[1] - 2,
                    batch.shape[2] - 2,
                    batch.shape[3])
 
-            for key in hemis_by_dir:
-                direction = np.array([key])
-                hemisphere = hemis_by_dir[key]
-                gauss_weight = gauss_weights_by_dir[key]
+            for w in w_by_dir:
+                direction = np.array([w])
+                weight = w_by_dir[w]
 
-                i, j, k = int(key[0] + 1), int(key[1] + 1), int(key[2] + 1)
-                mean_sf[batch_index[0]:batch_index[0] + dim[0]] +=\
-                    gauss_weight * np.multiply(
-                        batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k],
-                        hemisphere)
+                i, j, k = int(w[0] + 1), int(w[1] + 1), int(w[2] + 1)
+                mean_sf[index[0]:index[0] + dim[0]] +=\
+                    np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k],
+                                weight)
 
-            mean_sf[batch_index[0]:batch_index[0] + dim[0]] = \
-                np.multiply(mean_sf[batch_index[0]:batch_index[0] + dim[0]],
-                            1.0 / (sum_of_dot_weights * gauss_weight + 1.0))
+            mean_sf[index[0]:index[0] + dim[0]] =\
+                np.multiply(
+                    mean_sf[index[0]:index[0] + dim[0]],
+                    1.0 / (norm_w + 1.0))
 
-        self.fodf = np.zeros((self.fodf.shape[0],
-                             self.fodf.shape[1],
-                             self.fodf.shape[2],
-                             ncoef_from_order(sh_order,
-                                              sh_basis)),
-                             dtype='float32')
+        fodf_energy = np.sum(sf)
+        avfodf_energy = np.sum(mean_sf)
+
+        print('fodf/avfodf energy: ', fodf_energy / avfodf_energy)
+
+        fodf_energy = np.mean(self.fodf[..., 0])
+
+        self.fodf = np.zeros(
+            np.append(
+                self.fodf.shape[:-1],
+                [ncoef_from_order(sh_order, sh_basis)]),
+            dtype='float32')
+
         if mask:
             self.fodf[self.mask] =\
                 np.array([sf_to_sh(i, sphere, sh_order, sh_basis)
@@ -151,6 +142,9 @@ class AFiberOrientationDistribution(object):
             self.fodf =\
                 np.array([sf_to_sh(i, sphere, sh_order, sh_basis)
                           for i in mean_sf])
+
+        avfodf_energy = np.mean(self.fodf[..., 0])
+        print('fodf/avfodf energy: ', fodf_energy / avfodf_energy)
 
         self.sh_basis = sh_basis
         self.sh_order = sh_order
@@ -166,19 +160,6 @@ class AFiberOrientationDistribution(object):
         """
         image = nib.Nifti1Image(self.fodf.astype(np.float32), self.affine)
         image.to_filename(filename)
-
-    def normalize_by_voxel(self):
-        """
-        Perform voxel-wise normalization of FODF (in place)
-        """
-        norm = np.linalg.norm(self.fodf, axis=-1, keepdims=False)
-        normalized_sh = np.zeros_like(self.fodf)
-        mask = norm > 0
-        masked_norm = np.reshape(norm[mask],
-                                 (norm[mask].shape[0], 1))
-        normalized_sh[mask] = self.fodf[mask] / masked_norm
-
-        self.fodf = normalized_sh
 
     def compute_odd_on_full_coeffs_ratio(self):
         """
@@ -311,63 +292,41 @@ class AFiberOrientationDistribution(object):
 
         return directions
 
-    def _get_dot_weights(self, sphere, sharpness):
+    def _get_weights(self, sphere, dot_sharpness, sigma):
         """
-        Calculate the dot product (cos(theta)**sharpness) between
-        vertices on the sphere and directions to adjacent voxels
+        Get neighbors weight in respect to the direction to a voxel
 
         Parameters
-        ==========
+        ----------
         sphere: Sphere
-            sphere on which the SF is approximated
-        sharpness: float
-            exponent of the dot product
-
-        Returns
-        =======
-        hemis_by_dir: dictionary
-            dictionary mapping voxel directions to dot products with
-            sphere vertices in this direction for each direction
-        sum_of_weights: numpy array
-            Normalization factor for each averaged direction on the sphere
-        """
-        directions = self._get_directions_to_voxels()
-
-        dir_norm =\
-            directions / np.linalg.norm(directions, axis=1, keepdims=True)
-        hemispheres = np.dot(sphere.vertices, dir_norm.T)
-        hemispheres = np.where(hemispheres > 0.0, hemispheres**sharpness, 0.0)
-
-        dir_keys = list(map(tuple, directions))
-        hemis_by_dir = dict(zip(dir_keys, list(hemispheres.T)))
-        sum_of_dot_weights = np.sum(hemispheres, axis=-1)
-
-        return hemis_by_dir, sum_of_dot_weights
-
-    def _get_gaussian_weights(self, sigma):
-        """
-        Get weights for neighboors using a gaussian of variance sigma
-        (not normalized)
-
-        Parameters
-        ==========
+            sphere used for SF reconstruction
+        dot_sharpness: float
+            dot product exponent
         sigma: float
-            Variance of the gaussian
+            variance of the gaussian used for weighting neighbors
 
         Returns
-        =======
-
+        -------
+        weights: dictionary
+            vertices weights in respect to directions
+        norm: array
+            per vertex norm of weights
         """
         directions = self._get_directions_to_voxels()
         dir_norms = np.linalg.norm(directions, axis=-1, keepdims=True)
+        normalized_dir = directions/dir_norms
 
-        weights = np.exp(-dir_norms**2 / (2 * sigma**2))
-        sum_of_gauss_weights = np.sum(weights)
+        g_weights = np.exp(-dir_norms**2 / (2 * sigma**2))
+        d_weights = np.dot(sphere.vertices, normalized_dir.T)
+        d_weights = np.where(d_weights > 0.0, d_weights**dot_sharpness, 0.0)
+
+        weights = np.multiply(d_weights, g_weights.T)
+        norm = np.sum(weights, axis=-1)
 
         dir_keys = list(map(tuple, directions))
-        gaus_weight_by_dir = dict(zip(dir_keys, list(weights)))
+        weights_by_dir = dict(zip(dir_keys, list(weights.T)))
 
-        return gaus_weight_by_dir, sum_of_gauss_weights
+        return weights_by_dir, norm
 
     def _get_ratio_asym_on_total_voxels(self, asym_measure):
         """
@@ -392,33 +351,6 @@ class AFiberOrientationDistribution(object):
 
         return np.array([asym_thresholds, asym_ratios])
 
-    def _get_hemisphere_around_dir(self, dir, data, sphere):
-        """
-        Get the indices of vertices on the same hemisphere than dir
-
-        Parameters
-        ==========
-        dir: numpy array(N,3)
-            direction of hemisphere
-        sphere: Sphere
-            sphere to use for hemisphere
-
-        Returns
-        =======
-        indices: array
-            Indices of vertices on hemisphere in direction dir
-        """
-        mask = np.dot(dir, sphere.vertices.T) >= 0
-        hemispheres = []
-        sf_on_hemispheres = []
-        for i in range(mask.shape[0]):
-            verts = sphere.vertices[mask[i]]
-            sf = data[i][mask[i], None]
-            hemispheres.append(HemiSphere(xyz=verts))
-            sf_on_hemispheres.append(sf)
-
-        return hemispheres, sf_on_hemispheres
-
 
 class APeaks(object):
     def __init__(self, data, affine):
@@ -440,14 +372,8 @@ class APeaks(object):
     def get_affine(self):
         return self.affine
 
-    def get_npeaks(self):
-        return self.npeaks
-
     def get_peaks_count(self):
         return self.peaks_count
-
-    def get_labels(self):
-        return self.labels
 
     def save_to_file(self, filename):
         """
@@ -455,50 +381,25 @@ class APeaks(object):
         """
         nib.save(nib.Nifti1Image(self.peaks, self.affine), filename)
 
-    def label_configs(self, tol_in_degrees=5.0):
-        """
-        Classify intra-voxel configurations
-
-        Parameters
-        ----------
-        tol_in_degrees: float
-            tolerance in degrees for angle between peaks in straight fibers
-        """
-        labels = np.zeros_like(self.peaks_count, dtype='int32')
-        two_peaks = self.peaks[self.peaks_count == 2, :2]
-        cos_theta = np.zeros(two_peaks.shape[0])
-        for index in range(two_peaks.shape[0]):
-            cos_theta[index] =\
-                np.dot(two_peaks[index][0], two_peaks[index][1].T)
-
-        # half-orientations are labelled '1'
-        labels[self.peaks_count == 1] = 1
-        # straight single fiber orientations are labelled '2' whereas
-        # bending single fiber orientations are labelled '3'
-        labels[self.peaks_count == 2] =\
-            (cos_theta > np.cos((180.0 - tol_in_degrees) / 180.0 * np.pi)) + 1
-        # 3-directions FODF (such as 'T''s ans 'Y''s) are labelled '4'
-        labels[self.peaks_count == 3] = 4
-        # symmetric 2-fibers crossings ('X''s) are labeled '5'
-        # symmetric 3-fibers crossings are labeled '6'
-        # other complex fiber orientations are labeled '7'
-
-        self.labels = labels
-
 
 class AFODMetricsPopper(object):
-    def __init__(self, aFOD, aPeaks):
+    def __init__(self, aFOD=None, aPeaks=None, ofr=None, mad=None):
         """
         Build the AFODMetricsPopper object
 
         The AFODMetricsPopper is a class containing metrics with
         respect to asymmetric fiber orientation distribution functions
+
+        Parameters
+        ----------
+        aFOD: AFOD
         """
         self.aFOD = aFOD
         self.aPeaks = aPeaks
-        self.odd_on_full_coeffs_ratio = None
-        self.mean_antipodal_distance = None
+        self.odd_on_full_coeffs_ratio = ofr
+        self.mean_antipodal_distance = mad
         self.labels = None
+        self.nufo = None
 
     def save_odf_on_full_coeffs_ratio(self, filename):
         """
@@ -536,8 +437,8 @@ class AFODMetricsPopper(object):
             Name of the file to save
         """
         if self.labels is not None:
-            nib.Nifti1Image(self.labels.astype(np.float32),
-                            self.aFOD.get_affine()).to_filename(filename)
+            nib.Nifti1Image(self.labels.astype(np.uint8),
+                            self.aPeaks.get_affine()).to_filename(filename)
 
     def compute_odd_on_full_coeffs_ratio(self):
         """
@@ -567,7 +468,7 @@ class AFODMetricsPopper(object):
             logger.warning('No FODF supplied for computing\
                             mean antipodal distance')
 
-    def compute_voxel_configs_labels_map(self, mad_th=0.2):
+    def compute_configs_labels_from_mad(self, mad_th=0.2):
         """
         Label configuration of fiber orientations for each voxel
 
@@ -577,6 +478,15 @@ class AFODMetricsPopper(object):
             threshold applied on mean antipodal symmetry map to
             classify FODF as symmetric or not
         """
+        if self.aPeaks is None:
+            logger.warning('Can\'t label fiber orientations configurations' +
+                           ' without peaks data.')
+            return
+        if self.mean_antipodal_distance is None:
+            logger.warning('Can\'t label fiber configurations without' +
+                           ' mean antipodal distance map')
+            return
+
         peaks_count = self.aPeaks.get_peaks_count()
         mad = self.mean_antipodal_distance
         labels = np.zeros_like(peaks_count, dtype='int32')
@@ -587,12 +497,52 @@ class AFODMetricsPopper(object):
         # bending single fiber orientations are labelled '3'
         labels[np.logical_and(peaks_count == 2, mad < mad_th)] = 2
         labels[np.logical_and(peaks_count == 2, mad > mad_th)] = 3
-        # 3-directions FODF (such as 'T''s ans 'Y''s) are labelled '4'
+        # 3-directions FODF (such as 'T''s and 'Y''s) are labelled '4'
         labels[peaks_count == 3] = 4
         # symmetric 2-fibers crossings ('X''s) are labeled '5'
         labels[np.logical_and(peaks_count == 4, mad < mad_th)] = 5
         # symmetric 3-fibers crossings are labeled '6'
         labels[np.logical_and(peaks_count == 6, mad < mad_th)] = 6
+        # other complex fiber orientations are labeled '7'
+        labels[np.logical_and(labels == 0, peaks_count > 0)] = 7
+
+        self.labels = labels
+
+    def compute_configs_labels_from_ofr(self, ofr_th=0.3):
+        """
+        Label configuration of fiber orientations for each voxel
+
+        Parameters
+        ----------
+        ofr_th: float
+            threshold applied on odd/full ratio map to
+            classify FODF as symmetric or not
+        """
+        if self.aPeaks is None:
+            logger.warning('Can\'t label fiber orientations configurations' +
+                           ' without peaks data.')
+            return
+        if self.odd_on_full_coeffs_ratio is None:
+            logger.warning('Can\'t label fiber configurations without' +
+                           ' OFR map')
+            return
+
+        peaks_count = self.aPeaks.get_peaks_count()
+        ofr = self.odd_on_full_coeffs_ratio
+        labels = np.zeros_like(peaks_count, dtype='int32')
+
+        # half-orientations are labelled '1'
+        labels[peaks_count == 1] = 1
+        # straight single fiber orientations are labelled '2' whereas
+        # bending single fiber orientations are labelled '3'
+        labels[np.logical_and(peaks_count == 2, ofr < ofr_th)] = 2
+        labels[np.logical_and(peaks_count == 2, ofr > ofr_th)] = 3
+        # 3-directions FODF (such as 'T''s and 'Y''s) are labelled '4'
+        labels[peaks_count == 3] = 4
+        # symmetric 2-fibers crossings ('X''s) are labeled '5'
+        labels[np.logical_and(peaks_count == 4, ofr < ofr_th)] = 5
+        # symmetric 3-fibers crossings are labeled '6'
+        labels[np.logical_and(peaks_count == 6, ofr < ofr_th)] = 6
         # other complex fiber orientations are labeled '7'
         labels[np.logical_and(labels == 0, peaks_count > 0)] = 7
 

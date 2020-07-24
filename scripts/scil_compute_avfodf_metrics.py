@@ -33,14 +33,25 @@ def _build_arg_parser():
     p.add_argument('--in_peaks',
                    help='Path to the input peaks file')
 
+    p.add_argument('--in_ofr',
+                   help='Path to the input OFR file')
+
+    p.add_argument('--in_mad',
+                   help='Path to the input MAD file')
+
     p.add_argument('--odd_full_ratio',
                    help='Output path of odd on full coefficients ratio file')
 
     p.add_argument('--mad',
                    help='Output path of mean antipodal distance file')
 
-    p.add_argument('--labels',
-                   help='Output path of the labeled image')
+    p.add_argument('--labels_mad',
+                   help='Output path of the labeled image using ' +
+                        'MAD asymmetry measure')
+
+    p.add_argument('--labels_ofr',
+                   help='Output path of the labeled image using ' +
+                        'OFR asymmetry measure')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
@@ -52,19 +63,22 @@ def _build_arg_parser():
     return p
 
 
-def main():
-    parser = _build_arg_parser()
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
-
+def get_inputs_list(args):
     inputs = []
     if args.in_fodf:
         inputs.append(args.in_fodf)
     if args.in_peaks:
         inputs.append(args.in_peaks)
+    if args.in_ofr:
+        inputs.append(args.in_ofr)
+    if args.in_mad:
+        inputs.append(args.in_mad)
     if not inputs:
         parser.error('No input: Please supply at least one input')
+    return inputs
 
+
+def get_outputs_list(args):
     outputs = []
     if args.odd_full_ratio:
         if not args.in_fodf:
@@ -76,19 +90,34 @@ def main():
             parser.error('Can\'t compute mean antipodal distance\
                           without FODF file')
         outputs.append(args.mad)
-    if args.labels:
+    if args.labels_ofr:
         if not args.in_peaks:
-            parser.error('Can\'t clean fodf from peaks file')
-        outputs.append(args.labels)
+            parser.error('Can\'t produce labels without peaks file')
+        outputs.append(args.labels_ofr)
+    if args.labels_mad:
+        if not args.in_peaks:
+            parser.error('Can\'t produce labels without peaks file')
+        outputs.append(args.labels_mad)
     if not outputs:
         parser.error('No output to be done.')
+    return outputs
+
+
+def main():
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
 
     # Checking args
+    inputs = get_inputs_list(args)
+    outputs = get_outputs_list(args)
     assert_inputs_exist(parser, inputs)
     assert_outputs_exist(parser, args, outputs, check_dir_exists=True)
 
     FOD = None
     peaks = None
+    ofr = None
+    mad = None
     if args.in_fodf:
         fodf_img = nib.nifti1.load(args.in_fodf)
         fodf_data = fodf_img.get_fdata()
@@ -102,10 +131,14 @@ def main():
         peaks_data = peaks_img.get_fdata()
         peaks_affine = peaks_img.affine
         peaks = APeaks(peaks_data, peaks_affine)
+    if args.in_mad:
+        mad = nib.nifti1.load(args.in_mad).get_fdata()
+    if args.in_ofr:
+        ofr = nib.nifti1.load(args.in_ofr).get_fdata()
 
-    metrics_popper = AFODMetricsPopper(FOD, peaks)
+    metrics_popper = AFODMetricsPopper(FOD, peaks, ofr, mad)
 
-    # Computing neighbors average of fODFs
+    # Computing AVFODF metrics
     t0 = time.perf_counter()
     if args.odd_full_ratio:
         logging.info('Compute odd/full coefficients ratio')
@@ -115,10 +148,14 @@ def main():
         logging.info('Compute mean antipodal distance')
         metrics_popper.compute_mean_antipodal_distance()
         metrics_popper.save_mean_antipodal_distance(args.mad)
-    if args.labels:
-        logging.info('Label intra-voxel configurations')
-        metrics_popper.compute_voxel_configs_labels_map()
-        metrics_popper.save_fiber_config_labels(args.labels)
+    if args.labels_mad:
+        logging.info('Label intra-voxel configurations using MAD map')
+        metrics_popper.compute_configs_labels_from_mad()
+        metrics_popper.save_fiber_config_labels(args.labels_mad)
+    if args.labels_ofr:
+        logging.info('Label intra-voxel configurations using OFR map')
+        metrics_popper.compute_configs_labels_from_ofr()
+        metrics_popper.save_fiber_config_labels(args.labels_ofr)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0
