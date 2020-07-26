@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Use multiple bundles to perform a voxel-wise vote (occurence across input).
@@ -109,7 +109,7 @@ def main():
             _, indices = perform_streamlines_operation(intersection,
                                                        [fusion_streamlines,
                                                         bundle], 0)
-            streamlines_vote[list(indices), i] += 1
+            streamlines_vote[list(indices), [i]] += 1
 
     if args.same_tractogram:
         real_indices = []

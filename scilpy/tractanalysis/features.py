@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 
-from builtins import range
 from itertools import count, takewhile
 import logging
 
-from dipy.segment.clustering import Cluster, QuickBundles, qbx_and_merge
+from dipy.segment.clustering import QuickBundles, qbx_and_merge
 from dipy.segment.metric import ResampleFeature
 from dipy.segment.metric import AveragePointwiseEuclideanMetric
 from dipy.tracking import metrics as tm
@@ -208,13 +207,9 @@ def remove_outliers(streamlines, threshold):
         list: streamlines considered outliers
     """
     summary = outliers_removal_using_hierarchical_quickbundles(streamlines)
-    outliers, outliers_removed = prune(streamlines,
-                                       threshold, summary)
-    outliers_strl = Cluster(indices=outliers, refdata=streamlines)
-    no_outliers_strl = Cluster(indices=outliers_removed,
-                               refdata=streamlines)
+    outliers_ids, inliers_ids = prune(streamlines, threshold, summary)
 
-    return no_outliers_strl, outliers_strl
+    return outliers_ids, inliers_ids
 
 
 def get_streamlines_centroid(streamlines, nb_points):

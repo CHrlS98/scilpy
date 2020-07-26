@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -22,7 +22,6 @@ signals, pulsation and misalignment artifacts, see
 MRM 2011].
 """
 
-from builtins import range
 import argparse
 import logging
 
@@ -170,7 +169,7 @@ def main():
 
     img = nib.load(args.input)
     data = img.get_fdata(dtype=np.float32)
-    affine = img.get_affine()
+    affine = img.affine
     if args.mask is None:
         mask = None
     else:

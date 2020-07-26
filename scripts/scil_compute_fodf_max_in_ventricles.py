@@ -1,13 +1,13 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
-Script to compute the maximum fODF in the ventricles.
+Script to compute the maximum fODF in the ventricles. The ventricules are
+estimated from a MD and FA threshold.
+
+This allows to clip the noise of fODF using an absolute thresold.
 """
 
-from builtins import str
-from builtins import range
-from past.utils import old_div
 import argparse
 import logging
 
@@ -21,9 +21,17 @@ from scilpy.io.utils import (add_overwrite_arg,
 from scilpy.reconst.utils import find_order_from_nb_coeff, get_b_matrix
 
 
+EPILOG = """
+[1] Dell'Acqua, Flavio, et al. "Can spherical deconvolution provide more
+    information than fiber orientations? Hindrance modulated orientational
+    anisotropy, a true‐tract specific index to characterize white matter
+    diffusion." Human brain mapping 34.10 (2013): 2464-2483.
+"""
+
+
 def _build_arg_parser():
     p = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
-                                description=__doc__)
+                                description=__doc__, epilog=EPILOG)
 
     p.add_argument('input',  metavar='fODFs',
                    help='Path of the fODF volume in spherical harmonics (SH).')
@@ -32,6 +40,7 @@ def _build_arg_parser():
     p.add_argument('md',  metavar='MD',
                    help='Path to the mean diffusivity (MD) volume.')
 
+    # TODO Start one first line
     p.add_argument(
         '--fa_t', dest='fa_threshold',  type=float, default='0.1',
         help='Maximal threshold of FA (voxels under that threshold are '
@@ -56,11 +65,13 @@ def _build_arg_parser():
     return p
 
 
+# TODO Useless functions, to remove
 def load(path):
     img = nib.load(path)
-    return img.get_data(), img.affine, img.header.get_zooms()[:3]
+    return img.get_fdata(dtype=np.float32), img.affine, img.header.get_zooms()[:3]
 
 
+# TODO Useless functions, to remove
 def save(data, affine, output):
     img = nib.Nifti1Image(np.array(data, 'float32'),  affine)
     nib.save(img, output)
@@ -87,7 +98,7 @@ def get_ventricles_max_fodf(data, fa, md, zoom, args):
     # Hence, we multiply by the volume of a voxel
     vol = (zoom[0] * zoom[1] * zoom[2])
     if vol != 0:
-        max_number_of_voxels = old_div(1000 * 8, vol)
+        max_number_of_voxels = 1000 * 8 // vol
     else:
         max_number_of_voxels = 1000
 

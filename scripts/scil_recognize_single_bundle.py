@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -27,15 +27,19 @@ from scilpy.io.utils import (add_overwrite_arg,
                              assert_outputs_exist,
                              load_matrix_in_any_format)
 
+EPILOG = """
+Garyfallidis, E., Côté, M. A., Rheault, F., ... &
+Descoteaux, M. (2018). Recognition of white matter
+bundles using local and global streamline-based registration and
+clustering. NeuroImage, 170, 283-295.
+"""
+
 
 def _build_arg_parser():
     p = argparse.ArgumentParser(
         formatter_class=argparse.RawTextHelpFormatter,
         description=__doc__,
-        epilog="""Garyfallidis, E., Côté, M. A., Rheault, F., ... &
-        Descoteaux, M. (2018). Recognition of white matter
-        bundles using local and global streamline-based registration and
-        clustering. NeuroImage, 170, 283-295.""")
+        epilog=EPILOG)
 
     p.add_argument('in_tractogram',
                    help='Input tractogram filename.')
@@ -67,10 +71,10 @@ def _build_arg_parser():
                    help='Do not write file if there is no streamline.')
 
     group = p.add_mutually_exclusive_group()
-    group.add_argument('--input_pickle',
+    group.add_argument('--in_pickle',
                        help='Input pickle clusters map file.\n'
                             'Will override the tractogram_clustering_thr parameter.')
-    group.add_argument('--output_pickle',
+    group.add_argument('--out_pickle',
                        help='Output pickle clusters map file.')
 
     add_reference_arg(p)
@@ -94,13 +98,13 @@ def main():
     # Default transformation source is expected to be ANTs
     transfo = load_matrix_in_any_format(args.in_transfo)
     if args.inverse:
-        transfo = np.linalg.inv(np.loadtxt(args.in_transfo))
+        transfo = np.linalg.inv(load_matrix_in_any_format(args.in_transfo))
 
     model_streamlines = transform_streamlines(model_file.streamlines, transfo)
 
     rng = np.random.RandomState(args.seed)
-    if args.input_pickle:
-        with open(args.input_pickle, 'rb') as infile:
+    if args.in_pickle:
+        with open(args.in_pickle, 'rb') as infile:
             cluster_map = pickle.load(infile)
         reco_obj = RecoBundles(wb_streamlines,
                                cluster_map=cluster_map,
@@ -112,8 +116,8 @@ def main():
                                rng=rng,
                                verbose=args.verbose)
 
-    if args.output_pickle:
-        with open(args.output_pickle, 'wb') as outfile:
+    if args.out_pickle:
+        with open(args.out_pickle, 'wb') as outfile:
             pickle.dump(reco_obj.cluster_map, outfile)
     _, indices = reco_obj.recognize(ArraySequence(model_streamlines),
                                     args.model_clustering_thr,
