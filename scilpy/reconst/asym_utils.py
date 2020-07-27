@@ -442,6 +442,7 @@ class AFODMetricsPopper(object):
             nib.Nifti1Image(self.labels.astype(np.uint8),
                             self.aPeaks.get_affine()).to_filename(fname)
         if self.nufo is not None:
+            print('going crazy')
             n_classes = int(self.nufo.max() + 1)
             for i in range(n_classes):
                 mask = self.nufo == i
