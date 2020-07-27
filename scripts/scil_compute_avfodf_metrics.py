@@ -39,6 +39,9 @@ def _build_arg_parser():
     p.add_argument('--in_mad',
                    help='Path to the input MAD file')
 
+    p.add_argument('--in_nufo',
+                   help='NuFO file input')
+
     p.add_argument('--odd_full_ratio',
                    help='Output path of odd on full coefficients ratio file')
 
@@ -73,6 +76,8 @@ def get_inputs_list(args):
         inputs.append(args.in_ofr)
     if args.in_mad:
         inputs.append(args.in_mad)
+    if args.in_nufo:
+        inputs.append(args.in_nufo)
     if not inputs:
         parser.error('No input: Please supply at least one input')
     return inputs
@@ -118,6 +123,7 @@ def main():
     peaks = None
     ofr = None
     mad = None
+    nufo = None
     if args.in_fodf:
         fodf_img = nib.nifti1.load(args.in_fodf)
         fodf_data = fodf_img.get_fdata()
@@ -135,8 +141,10 @@ def main():
         mad = nib.nifti1.load(args.in_mad).get_fdata()
     if args.in_ofr:
         ofr = nib.nifti1.load(args.in_ofr).get_fdata()
+    if args.in_nufo:
+        nufo = nib.nifti1.load(args.in_nufo).get_fdata()
 
-    metrics_popper = AFODMetricsPopper(FOD, peaks, ofr, mad)
+    metrics_popper = AFODMetricsPopper(FOD, peaks, ofr, mad, nufo)
 
     # Computing AVFODF metrics
     t0 = time.perf_counter()

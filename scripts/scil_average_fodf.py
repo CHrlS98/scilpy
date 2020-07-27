@@ -43,6 +43,16 @@ def _build_arg_parser():
                    help='Float epsilon for removing false positives')
 
     p.add_argument(
+        '--at', default=0.0, type=float,
+        help='WARNING!!! EXTREMELY IMPORTANT PARAMETER,\n VARIABLE '
+             'ACROSS DATASETS!!!\nAbsolute threshold on fODF amplitude.\nThis '
+             'value should be set to approximately 1.5 to 2 times the maximum\n'
+             'fODF amplitude in isotropic voxels (ex. ventricles).\n'
+             'compute_fodf_max_in_ventricles.py can be used to find the '
+             'maximal value.\nSee [Dell\'Acqua et al HBM 2013] '
+             '[%(default)s].')
+
+    p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
         help='SH order of the input (Default: 8)')
 
@@ -126,7 +136,7 @@ def main():
         FOD.save_to_file(args.avfodf)
     if args.peaks:
         logging.info('Extract peaks')
-        peaks = FOD.extract_peaks(sphere, args.npeaks)
+        peaks = FOD.extract_peaks(sphere, args.npeaks, args.at)
         peaks.save_to_file(args.peaks)
     t1 = time.perf_counter()
 

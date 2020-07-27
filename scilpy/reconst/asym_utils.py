@@ -84,6 +84,7 @@ class AFiberOrientationDistribution(object):
             (default: False)
         """
         # Convert to spherical function
+        # TODO: Use B matrix for more efficient conversion
         sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis)
                        for i in self.fodf],
                       dtype='float32')
@@ -102,10 +103,7 @@ class AFiberOrientationDistribution(object):
         # Compute average in batches
         for index in batch_indices:
             batch = sf[index]
-            dim = (batch.shape[0] - 2,
-                   batch.shape[1] - 2,
-                   batch.shape[2] - 2,
-                   batch.shape[3])
+            dim = tuple(np.array(batch.shape[:-1]) - np.array([2, 2, 2]))
 
             for w in w_by_dir:
                 direction = np.array([w])
@@ -121,12 +119,7 @@ class AFiberOrientationDistribution(object):
                     mean_sf[index[0]:index[0] + dim[0]],
                     1.0 / (norm_w + 1.0))
 
-        fodf_energy = np.sum(sf)
-        avfodf_energy = np.sum(mean_sf)
-
-        print('fodf/avfodf energy: ', fodf_energy / avfodf_energy)
-
-        fodf_energy = np.mean(self.fodf[..., 0])
+        print('fodf/avfodf energy: ', np.sum(sf) / np.sum(mean_sf))
 
         self.fodf = np.zeros(
             np.append(
@@ -142,9 +135,6 @@ class AFiberOrientationDistribution(object):
             self.fodf =\
                 np.array([sf_to_sh(i, sphere, sh_order, sh_basis)
                           for i in mean_sf])
-
-        avfodf_energy = np.mean(self.fodf[..., 0])
-        print('fodf/avfodf energy: ', fodf_energy / avfodf_energy)
 
         self.sh_basis = sh_basis
         self.sh_order = sh_order
@@ -224,17 +214,29 @@ class AFiberOrientationDistribution(object):
         self.fodf[self.fodf[..., 0] < epsilon] = 0.0
         self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
 
-    def extract_peaks(self, sphere, npeaks=10):
+    def extract_peaks(self, sphere, npeaks=10, a_threshold=0.0):
         """
         Extract peaks on FODF without any asumption of symmetry
 
         Parameters
-        ==========
+        ----------
         sphere: Sphere
             sphere to use for peak extraction
+        npeaks: int
+            max number of peaks to extract per odf
+        a_threshold: float
+            absolute threshold. FODF directions under this threshold
+            won't be considered in peak extraction
+
+        Returns
+        -------
+        peaks: APeaks
+            APeaks object containing extracted peaks
         """
+        # TODO: Use B matrix for more efficient conversion
         sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis)
                        for i in self.fodf])
+        sf[sf < a_threshold] = 0.
 
         peaks_dirs = np.zeros(list(sf.shape[0:3]) + [npeaks, 3])
         for index in ndindex(sf.shape[:-1]):
@@ -383,7 +385,7 @@ class APeaks(object):
 
 
 class AFODMetricsPopper(object):
-    def __init__(self, aFOD=None, aPeaks=None, ofr=None, mad=None):
+    def __init__(self, aFOD=None, aPeaks=None, ofr=None, mad=None, nufo=None):
         """
         Build the AFODMetricsPopper object
 
@@ -398,8 +400,8 @@ class AFODMetricsPopper(object):
         self.aPeaks = aPeaks
         self.odd_on_full_coeffs_ratio = ofr
         self.mean_antipodal_distance = mad
+        self.nufo = nufo
         self.labels = None
-        self.nufo = None
 
     def save_odf_on_full_coeffs_ratio(self, filename):
         """
@@ -427,18 +429,28 @@ class AFODMetricsPopper(object):
             nib.Nifti1Image(self.mean_antipodal_distance.astype(np.float32),
                             self.aFOD.get_affine()).to_filename(filename)
 
-    def save_fiber_config_labels(self, filename):
+    def save_fiber_config_labels(self, fname):
         """
         Save fiber configurations labels to file ``filename``
 
         Parameters
         ----------
-        filename: str
+        fname: str
             Name of the file to save
         """
         if self.labels is not None:
             nib.Nifti1Image(self.labels.astype(np.uint8),
-                            self.aPeaks.get_affine()).to_filename(filename)
+                            self.aPeaks.get_affine()).to_filename(fname)
+        if self.nufo is not None:
+            n_classes = int(self.nufo.max() + 1)
+            for i in range(n_classes):
+                mask = self.nufo == i
+                tmp = np.zeros_like(self.labels)
+                tmp[mask] = self.labels[mask]
+                tmp_fname = fname[:fname.find('.')] +\
+                    '_nufo_{0}'.format(i) + fname[fname.find('.'):]
+                nib.Nifti1Image(tmp.astype(np.uint8),
+                                self.aPeaks.get_affine()).to_filename(fname)
 
     def compute_odd_on_full_coeffs_ratio(self):
         """
