@@ -5,7 +5,7 @@ import numpy as np
 import nibabel as nib
 import matplotlib.pyplot as plt
 
-from dipy.reconst.shm import (sh_to_sf, sf_to_sh,
+from dipy.reconst.shm import (sh_to_sf, sf_to_sh, sh_to_sf_matrix,
                               sph_harm_full_ind_list)
 from dipy.core.sphere import HemiSphere, Sphere, hemi_icosahedron
 from dipy.core.ndindex import ndindex
@@ -234,14 +234,14 @@ class AFiberOrientationDistribution(object):
             APeaks object containing extracted peaks
         """
         # TODO: Use B matrix for more efficient conversion
-        sf = np.array([sh_to_sf(i, sphere, self.sh_order, self.sh_basis)
-                       for i in self.fodf])
-        sf[sf < a_threshold] = 0.
+        B = sh_to_sf_matrix(sphere, self.sh_order, self.sh_basis, False)
 
-        peaks_dirs = np.zeros(list(sf.shape[0:3]) + [npeaks, 3])
-        for index in ndindex(sf.shape[:-1]):
+        peaks_dirs = np.zeros(list(self.fodf.shape[0:3]) + [npeaks, 3])
+        for index in ndindex(self.fodf.shape[:-1]):
+            sf = np.dot(self.fodf[index], B)
+            sf[sf < a_threshold] = 0.
             directions, _, _ =\
-                peak_directions(sf[index], sphere, is_symmetric=False)
+                peak_directions(sf, sphere, is_symmetric=False)
             n = min(npeaks, directions.shape[0])
             peaks_dirs[index][:n] = directions[:n]
 
@@ -364,7 +364,7 @@ class APeaks(object):
         self.affine = affine
         self.npeaks = data.shape[-2]
         self.peaks_count =\
-            np.cumsum(np.linalg.norm(self.peaks, axis=-1) > 0.,
+            np.cumsum(np.sum(self.peaks**2, axis=-1) > 0.,
                       axis=-1)[..., -1]
         self.labels = None
 
@@ -382,6 +382,19 @@ class APeaks(object):
         Save peaks to file 'filename'
         """
         nib.save(nib.Nifti1Image(self.peaks, self.affine), filename)
+
+    def compute_nupeaks(self):
+        """
+        Compute NuPeaks map, where the value for a voxel is the number
+        of peaks at this voxel. For a symmetric input, the NuPeaks map is
+        equivalent to the NuFO map multiplied by 2.
+
+        Returns
+        -------
+        nupeaks: array
+            number of peaks per voxel for each voxel
+        """
+        return self.peaks_count
 
 
 class AFODMetricsPopper(object):
@@ -442,16 +455,15 @@ class AFODMetricsPopper(object):
             nib.Nifti1Image(self.labels.astype(np.uint8),
                             self.aPeaks.get_affine()).to_filename(fname)
         if self.nufo is not None:
-            print('going crazy')
             n_classes = int(self.nufo.max() + 1)
             for i in range(n_classes):
                 mask = self.nufo == i
                 tmp = np.zeros_like(self.labels)
                 tmp[mask] = self.labels[mask]
-                tmp_fname = fname[:fname.find('.')] +\
+                tmp_name = fname[:fname.find('.')] +\
                     '_nufo_{0}'.format(i) + fname[fname.find('.'):]
                 nib.Nifti1Image(tmp.astype(np.uint8),
-                                self.aPeaks.get_affine()).to_filename(fname)
+                                self.aPeaks.get_affine()).to_filename(tmp_name)
 
     def compute_odd_on_full_coeffs_ratio(self):
         """
@@ -560,3 +572,23 @@ class AFODMetricsPopper(object):
         labels[np.logical_and(labels == 0, peaks_count > 0)] = 7
 
         self.labels = labels
+
+
+def compare_nupeaks(sym_nupeaks, asym_nupeaks, npeaks):
+    """
+    Compare the NuPeaks map for symmetric fODF with the NuPeaks map for
+    asymmetric fODF
+    """
+    output = ''
+    for i in range(npeaks + 1):
+        mask = sym_nupeaks == i
+        masked_asym_nupeaks = asym_nupeaks[mask]
+        size = masked_asym_nupeaks.size
+        # Number of occurence of each number of peaks
+        bincount = np.bincount(masked_asym_nupeaks)
+        output += 'For sym_nupeaks == {0}\n'.format(i)
+        for j in range(bincount.size):
+            prop = bincount[j] / size * 100.
+            output +=\
+                ' Proportion of asym_nupeaks == {0}: {1} %\n'.format(j, prop)
+    return output
