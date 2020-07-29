@@ -39,18 +39,11 @@ def _build_arg_parser():
     p.add_argument('--peaks',
                    help='Output path of peak directions file')
 
+    p.add_argument('--nupeaks',
+                   help='Output path of NuPeaks file')
+
     p.add_argument('--epsilon', default=1e-16, type=float,
                    help='Float epsilon for removing false positives')
-
-    p.add_argument(
-        '--at', default=0.0, type=float,
-        help='WARNING!!! EXTREMELY IMPORTANT PARAMETER,\n VARIABLE '
-             'ACROSS DATASETS!!!\nAbsolute threshold on fODF amplitude.\nThis '
-             'value should be set to approximately 1.5 to 2 times the maximum\n'
-             'fODF amplitude in isotropic voxels (ex. ventricles).\n'
-             'compute_fodf_max_in_ventricles.py can be used to find the '
-             'maximal value.\nSee [Dell\'Acqua et al HBM 2013] '
-             '[%(default)s].')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
@@ -104,6 +97,8 @@ def main():
         outputs.append(args.rm_false_pos)
     if args.peaks:
         outputs.append(args.peaks)
+    if args.nupeaks:
+        outputs.append(args.nupeaks)
     if not outputs:
         parser.error('No output to be done.')
 
@@ -136,8 +131,12 @@ def main():
         FOD.save_to_file(args.avfodf)
     if args.peaks:
         logging.info('Extract peaks')
-        peaks = FOD.extract_peaks(sphere, args.npeaks, args.at)
+        peaks = FOD.extract_peaks(sphere, args.npeaks, 0.0, 0.3)
         peaks.save_to_file(args.peaks)
+    if args.nupeaks:
+        if not args.peaks:
+            peaks = FOD.extract_peaks(sphere, args.npeaks, 0.0, 0.3)
+        peaks.save_nupeaks(args.nupeaks)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0

@@ -134,8 +134,8 @@ def main():
     peaks.save_to_file(out_wm_fodf_peaks)
 
     logging.info('Compute NuPeaks on symmetric fodf')
-    fodf_nupeaks = peaks.compute_nupeaks()
-    nib.save(nib.Nifti1Image(fodf_nupeaks, affine),
+    fodf_nupeaks = peaks.get_nupeaks()
+    nib.save(nib.Nifti1Image(fodf_nupeaks.astype(np.uint8), affine),
              out_wm_fodf_nupeaks)
 
     logging.info('Average FODF')
@@ -152,8 +152,8 @@ def main():
     peaks.save_to_file(out_wm_avfodf_peaks)
 
     logging.info('Compute NuPeaks on avfodf')
-    avfodf_nupeaks = peaks.compute_nupeaks()
-    nib.save(nib.Nifti1Image(avfodf_nupeaks, affine),
+    avfodf_nupeaks = peaks.get_nupeaks()
+    nib.save(nib.Nifti1Image(avfodf_nupeaks.astype(np.uint8), affine),
              out_wm_avfodf_nupeaks)
 
     logging.info('Compare NuPeaks')

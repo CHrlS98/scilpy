@@ -103,13 +103,13 @@ def display_scene(actors, shape, window_size, orientation,
     Prepare and display a scene containing 'actors'
     """
     scene = prepare_scene(orientation, shape)
-    for actor in actors:
-        scene.add(actor)
-
     showm = window.ShowManager(scene, size=window_size,
                                title=title,
                                reset_camera=False,
                                interactor_style=interactor)
+    for actor in actors:
+        scene.add(actor)
+
     showm.initialize()
     showm.start()
 

@@ -101,6 +101,7 @@ class AFiberOrientationDistribution(object):
         w_by_dir, norm_w = self._get_weights(sphere, dot_sharpness, sigma)
 
         # Compute average in batches
+        # TODO: Apply hemisphere to opposite hemisphere
         for index in batch_indices:
             batch = sf[index]
             dim = tuple(np.array(batch.shape[:-1]) - np.array([2, 2, 2]))
@@ -214,7 +215,8 @@ class AFiberOrientationDistribution(object):
         self.fodf[self.fodf[..., 0] < epsilon] = 0.0
         self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
 
-    def extract_peaks(self, sphere, npeaks=10, a_threshold=0.0):
+    def extract_peaks(self, sphere, npeaks=10, a_threshold=0.0,
+                      r_threshold=0.5):
         """
         Extract peaks on FODF without any asumption of symmetry
 
@@ -227,25 +229,30 @@ class AFiberOrientationDistribution(object):
         a_threshold: float
             absolute threshold. FODF directions under this threshold
             won't be considered in peak extraction
+        r_threshold: float
+            relative threshold. Peaks less than r_threshold times
+            the biggest peak are discarded.
 
         Returns
         -------
         peaks: APeaks
             APeaks object containing extracted peaks
         """
-        # TODO: Use B matrix for more efficient conversion
         B = sh_to_sf_matrix(sphere, self.sh_order, self.sh_basis, False)
 
         peaks_dirs = np.zeros(list(self.fodf.shape[0:3]) + [npeaks, 3])
+        peaks_count = np.zeros(self.fodf.shape[:-1], dtype=np.uint8)
         for index in ndindex(self.fodf.shape[:-1]):
             sf = np.dot(self.fodf[index], B)
             sf[sf < a_threshold] = 0.
             directions, _, _ =\
-                peak_directions(sf, sphere, is_symmetric=False)
+                peak_directions(sf, sphere, is_symmetric=False,
+                                relative_peak_threshold=r_threshold)
             n = min(npeaks, directions.shape[0])
+            peaks_count[index] = n
             peaks_dirs[index][:n] = directions[:n]
 
-        return APeaks(peaks_dirs, self.affine)
+        return APeaks(peaks_dirs, self.affine, peaks_count)
 
     def _get_batches_indices(self, batch_size):
         """
@@ -355,7 +362,7 @@ class AFiberOrientationDistribution(object):
 
 
 class APeaks(object):
-    def __init__(self, data, affine):
+    def __init__(self, data, affine, nupeaks=None):
         """
         Build the APeaks object representing peaks
         extracted from asymmetric FODF
@@ -363,9 +370,14 @@ class APeaks(object):
         self.peaks = data
         self.affine = affine
         self.npeaks = data.shape[-2]
-        self.peaks_count =\
-            np.cumsum(np.sum(self.peaks**2, axis=-1) > 0.,
-                      axis=-1)[..., -1]
+        if nupeaks is not None:
+            self.nupeaks = nupeaks
+        else:
+            logger.warning('NuPeaks not provided. Computing from peaks. Could '
+                           'result in false positives from rounded 0 values.')
+            self.nupeaks =\
+                np.cumsum(np.sum(self.peaks**2, axis=-1) > 0.,
+                          axis=-1)[..., -1]
         self.labels = None
 
     def get_peaks(self):
@@ -374,31 +386,35 @@ class APeaks(object):
     def get_affine(self):
         return self.affine
 
-    def get_peaks_count(self):
-        return self.peaks_count
-
     def save_to_file(self, filename):
         """
         Save peaks to file 'filename'
         """
         nib.save(nib.Nifti1Image(self.peaks, self.affine), filename)
 
-    def compute_nupeaks(self):
+    def save_nupeaks(self, filename):
         """
-        Compute NuPeaks map, where the value for a voxel is the number
+        Save nupeaks to file 'filename'
+        """
+        nib.save(nib.Nifti1Image(self.nupeaks.astype(np.uint8), self.affine),
+                 filename)
+
+    def get_nupeaks(self):
+        """
+        Get NuPeaks map, where the value for a voxel is the number
         of peaks at this voxel. For a symmetric input, the NuPeaks map is
-        equivalent to the NuFO map multiplied by 2.
+        equivalent to the NuFO map times 2.
 
         Returns
         -------
         nupeaks: array
             number of peaks per voxel for each voxel
         """
-        return self.peaks_count
+        return self.nupeaks
 
 
 class AFODMetricsPopper(object):
-    def __init__(self, aFOD=None, aPeaks=None, ofr=None, mad=None, nufo=None):
+    def __init__(self, aFOD=None, aPeaks=None, ofr=None, vf=None):
         """
         Build the AFODMetricsPopper object
 
@@ -411,9 +427,8 @@ class AFODMetricsPopper(object):
         """
         self.aFOD = aFOD
         self.aPeaks = aPeaks
-        self.odd_on_full_coeffs_ratio = ofr
-        self.mean_antipodal_distance = mad
-        self.nufo = nufo
+        self.ofr = ofr
+        self.vf = vf
         self.labels = None
 
     def save_odf_on_full_coeffs_ratio(self, filename):
@@ -425,21 +440,8 @@ class AFODMetricsPopper(object):
         filename: str
             Name of the file to save
         """
-        if self.odd_on_full_coeffs_ratio is not None:
-            nib.Nifti1Image(self.odd_on_full_coeffs_ratio.astype(np.float32),
-                            self.aFOD.get_affine()).to_filename(filename)
-
-    def save_mean_antipodal_distance(self, filename):
-        """
-        Save mean antipodal distances to file ``filename``
-
-        Parameters
-        ----------
-        filename: str
-            Name of the file to save
-        """
-        if self.mean_antipodal_distance is not None:
-            nib.Nifti1Image(self.mean_antipodal_distance.astype(np.float32),
+        if self.ofr is not None:
+            nib.Nifti1Image(self.ofr.astype(np.float32),
                             self.aFOD.get_affine()).to_filename(filename)
 
     def save_fiber_config_labels(self, fname):
@@ -454,16 +456,6 @@ class AFODMetricsPopper(object):
         if self.labels is not None:
             nib.Nifti1Image(self.labels.astype(np.uint8),
                             self.aPeaks.get_affine()).to_filename(fname)
-        if self.nufo is not None:
-            n_classes = int(self.nufo.max() + 1)
-            for i in range(n_classes):
-                mask = self.nufo == i
-                tmp = np.zeros_like(self.labels)
-                tmp[mask] = self.labels[mask]
-                tmp_name = fname[:fname.find('.')] +\
-                    '_nufo_{0}'.format(i) + fname[fname.find('.'):]
-                nib.Nifti1Image(tmp.astype(np.uint8),
-                                self.aPeaks.get_affine()).to_filename(tmp_name)
 
     def compute_odd_on_full_coeffs_ratio(self):
         """
@@ -471,69 +463,13 @@ class AFODMetricsPopper(object):
         norm of full order SH order coefficients per voxel
         """
         if self.aFOD:
-            self.odd_on_full_coeffs_ratio =\
+            self.ofr =\
                 self.aFOD.compute_odd_on_full_coeffs_ratio()
         else:
             logger.warning('No FODF supplied for computing\
                             odd/full coefficients ratio')
 
-    def compute_mean_antipodal_distance(self, precision=2):
-        """
-        Compute the normalized distance between a vertex and its antipod
-
-        Parameters
-        ----------
-        precision: int
-            number of subdivisions of the icosahedron used for estimating SF
-        """
-        if self.aFOD:
-            self.mean_antipodal_distance =\
-                self.aFOD.compute_mean_antipodal_distance(precision)
-        else:
-            logger.warning('No FODF supplied for computing\
-                            mean antipodal distance')
-
-    def compute_configs_labels_from_mad(self, mad_th=0.2):
-        """
-        Label configuration of fiber orientations for each voxel
-
-        Parameters
-        ----------
-        mad_th: float
-            threshold applied on mean antipodal symmetry map to
-            classify FODF as symmetric or not
-        """
-        if self.aPeaks is None:
-            logger.warning('Can\'t label fiber orientations configurations' +
-                           ' without peaks data.')
-            return
-        if self.mean_antipodal_distance is None:
-            logger.warning('Can\'t label fiber configurations without' +
-                           ' mean antipodal distance map')
-            return
-
-        peaks_count = self.aPeaks.get_peaks_count()
-        mad = self.mean_antipodal_distance
-        labels = np.zeros_like(peaks_count, dtype='int32')
-
-        # half-orientations are labelled '1'
-        labels[peaks_count == 1] = 1
-        # straight single fiber orientations are labelled '2' whereas
-        # bending single fiber orientations are labelled '3'
-        labels[np.logical_and(peaks_count == 2, mad < mad_th)] = 2
-        labels[np.logical_and(peaks_count == 2, mad > mad_th)] = 3
-        # 3-directions FODF (such as 'T''s and 'Y''s) are labelled '4'
-        labels[peaks_count == 3] = 4
-        # symmetric 2-fibers crossings ('X''s) are labeled '5'
-        labels[np.logical_and(peaks_count == 4, mad < mad_th)] = 5
-        # symmetric 3-fibers crossings are labeled '6'
-        labels[np.logical_and(peaks_count == 6, mad < mad_th)] = 6
-        # other complex fiber orientations are labeled '7'
-        labels[np.logical_and(labels == 0, peaks_count > 0)] = 7
-
-        self.labels = labels
-
-    def compute_configs_labels_from_ofr(self, ofr_th=0.3):
+    def compute_configs_labels(self, ofr_th=0.3):
         """
         Label configuration of fiber orientations for each voxel
 
@@ -542,36 +478,88 @@ class AFODMetricsPopper(object):
         ofr_th: float
             threshold applied on odd/full ratio map to
             classify FODF as symmetric or not
+
+        Note
+        ----
+        * half-orientations are labelled '1'
+        * straight single fiber orientations are labelled '2' whereas
+          bending single fiber orientations are labelled '3'
+        * 3-directions FODF (such as 'T''s and 'Y''s) are labelled '4'
+        * symmetric 2-fibers crossings ('X''s) are labeled '5'
+        * symmetric 3-fibers crossings are labeled '6'
+        * other complex fiber orientations are labeled '7'
         """
         if self.aPeaks is None:
             logger.warning('Can\'t label fiber orientations configurations' +
                            ' without peaks data.')
             return
-        if self.odd_on_full_coeffs_ratio is None:
+        if self.ofr is None:
             logger.warning('Can\'t label fiber configurations without' +
                            ' OFR map')
             return
 
-        peaks_count = self.aPeaks.get_peaks_count()
-        ofr = self.odd_on_full_coeffs_ratio
+        peaks_count = self.aPeaks.get_nupeaks()
+        ofr = self.ofr
         labels = np.zeros_like(peaks_count, dtype='int32')
 
-        # half-orientations are labelled '1'
         labels[peaks_count == 1] = 1
-        # straight single fiber orientations are labelled '2' whereas
-        # bending single fiber orientations are labelled '3'
         labels[np.logical_and(peaks_count == 2, ofr < ofr_th)] = 2
         labels[np.logical_and(peaks_count == 2, ofr > ofr_th)] = 3
-        # 3-directions FODF (such as 'T''s and 'Y''s) are labelled '4'
         labels[peaks_count == 3] = 4
-        # symmetric 2-fibers crossings ('X''s) are labeled '5'
         labels[np.logical_and(peaks_count == 4, ofr < ofr_th)] = 5
-        # symmetric 3-fibers crossings are labeled '6'
         labels[np.logical_and(peaks_count == 6, ofr < ofr_th)] = 6
-        # other complex fiber orientations are labeled '7'
         labels[np.logical_and(labels == 0, peaks_count > 0)] = 7
 
         self.labels = labels
+
+    def get_crossing_fibers_proportions(self, tissue, threshold):
+        """
+        Compute proportion of crossing fibers in the region defined by
+        `mask` if specified.
+
+        Parameters
+        ----------
+        tissue: {'csf', 'gm', 'wm'}
+            tissue to consider in volume fractions map
+        threshold: float
+            threshold to apply to volume fractions map for chosen tissue
+
+        Returns
+        -------
+        ratio: float
+            ratio of crossing fibers on total number of voxels with fiber
+
+        Note
+        ----
+        A crossing fiber is any fiber with more than 2 peaks.
+        """
+        # Pre-processing checks
+        if self.aPeaks is None:
+            logger.warning('Peaks data missing. Can\'t compute crossing'
+                           ' fibers proportions')
+            return
+        if self.vf is None:
+            logger.warning('Volume fractions data missing. Can\'t compute '
+                           'crossing fibers proportions')
+            return
+
+        if tissue == 'csf':
+            mask = self.vf[..., 0] > threshold
+        elif tissue == 'gm':
+            mask = self.vf[..., 1] > threshold
+        elif tissue == 'wm':
+            mask = self.vf[..., 2] > threshold
+        else:
+            logger.warning('Invalid tissue name.')
+            return
+
+        nupeaks = self.aPeaks.get_nupeaks()
+        if nupeaks[mask].size > 0:
+            ratio = np.count_nonzero(nupeaks[mask] > 2) / nupeaks[mask].size
+        else:
+            ratio = 0.0
+
+        return ratio
 
 
 def compare_nupeaks(sym_nupeaks, asym_nupeaks, npeaks):
