@@ -245,12 +245,13 @@ class AFiberOrientationDistribution(object):
         for index in ndindex(self.fodf.shape[:-1]):
             sf = np.dot(self.fodf[index], B)
             sf[sf < a_threshold] = 0.
-            directions, _, _ =\
+            directions, values, _ =\
                 peak_directions(sf, sphere, is_symmetric=False,
                                 relative_peak_threshold=r_threshold)
             n = min(npeaks, directions.shape[0])
             peaks_count[index] = n
-            peaks_dirs[index][:n] = directions[:n]
+            peaks_dirs[index][:n] =\
+                np.multiply(directions[:n], values[:n].reshape(n, 1))
 
         return APeaks(peaks_dirs, self.affine, peaks_count)
 
@@ -373,8 +374,8 @@ class APeaks(object):
         if nupeaks is not None:
             self.nupeaks = nupeaks
         else:
-            logger.warning('NuPeaks not provided. Computing from peaks. Could '
-                           'result in false positives from rounded 0 values.')
+            logging.warning('NuPeaks not provided. Computing from peaks. Could'
+                            ' result in false positives from rounded values.')
             self.nupeaks =\
                 np.cumsum(np.sum(self.peaks**2, axis=-1) > 0.,
                           axis=-1)[..., -1]
@@ -410,7 +411,7 @@ class APeaks(object):
         nupeaks: array
             number of peaks per voxel for each voxel
         """
-        return self.nupeaks
+        return self.nupeaks.astype(np.uint8)
 
 
 class AFODMetricsPopper(object):
@@ -428,7 +429,12 @@ class AFODMetricsPopper(object):
         self.aFOD = aFOD
         self.aPeaks = aPeaks
         self.ofr = ofr
-        self.vf = vf
+        if vf is not None:
+            self.vf = {'csf': vf[..., 0],
+                       'gm': vf[..., 1],
+                       'wm': vf[..., 2]}
+        else:
+            self.vf = None
         self.labels = None
 
     def save_odf_on_full_coeffs_ratio(self, filename):
@@ -466,7 +472,7 @@ class AFODMetricsPopper(object):
             self.ofr =\
                 self.aFOD.compute_odd_on_full_coeffs_ratio()
         else:
-            logger.warning('No FODF supplied for computing\
+            logging.warning('No FODF supplied for computing\
                             odd/full coefficients ratio')
 
     def compute_configs_labels(self, ofr_th=0.3):
@@ -490,12 +496,12 @@ class AFODMetricsPopper(object):
         * other complex fiber orientations are labeled '7'
         """
         if self.aPeaks is None:
-            logger.warning('Can\'t label fiber orientations configurations' +
-                           ' without peaks data.')
+            logging.warning('Can\'t label fiber orientations configurations' +
+                            ' without peaks data.')
             return
         if self.ofr is None:
-            logger.warning('Can\'t label fiber configurations without' +
-                           ' OFR map')
+            logging.warning('Can\'t label fiber configurations without' +
+                            ' OFR map')
             return
 
         peaks_count = self.aPeaks.get_nupeaks()
@@ -531,28 +537,23 @@ class AFODMetricsPopper(object):
 
         Note
         ----
-        A crossing fiber is any fiber with more than 2 peaks.
+        A crossing FODF is any FODF with more than 2 peaks.
         """
         # Pre-processing checks
         if self.aPeaks is None:
-            logger.warning('Peaks data missing. Can\'t compute crossing'
-                           ' fibers proportions')
+            logging.warning('Peaks data missing. Can\'t compute crossing'
+                            ' fibers proportions')
             return
         if self.vf is None:
-            logger.warning('Volume fractions data missing. Can\'t compute '
-                           'crossing fibers proportions')
+            logging.warning('Volume fractions data missing. Can\'t compute '
+                            'crossing fibers proportions')
             return
 
-        if tissue == 'csf':
-            mask = self.vf[..., 0] > threshold
-        elif tissue == 'gm':
-            mask = self.vf[..., 1] > threshold
-        elif tissue == 'wm':
-            mask = self.vf[..., 2] > threshold
-        else:
-            logger.warning('Invalid tissue name.')
+        if tissue not in ['csf', 'wm', 'gm']:
+            logging.warning('Invalid tissue name.')
             return
 
+        mask = self.vf[tissue] > threshold
         nupeaks = self.aPeaks.get_nupeaks()
         if nupeaks[mask].size > 0:
             ratio = np.count_nonzero(nupeaks[mask] > 2) / nupeaks[mask].size
@@ -561,22 +562,56 @@ class AFODMetricsPopper(object):
 
         return ratio
 
+    def get_nupeaks_proportions(self, tissue, threshold):
+        """
+        Get proportion of voxels containing `nb_peaks` peaks inside a mask
+        where the volume fraction for a chosen tissue is higher than a given
+        threshold.
 
-def compare_nupeaks(sym_nupeaks, asym_nupeaks, npeaks):
+        Parameters
+        ----------
+        nb_peaks: int
+            number of peaks of FODF of interest
+        tissue: {'csf', 'gm', 'wm'}
+        """
+        if self.aPeaks is None:
+            logging.warning('Peaks data missing. Can\'t compute crossing'
+                            ' fibers proportions')
+            return
+        if self.vf is None:
+            logging.warning('Volume fractions data missing. Can\'t compute '
+                            'crossing fibers proportions')
+            return
+        if tissue not in ['csf', 'wm', 'gm']:
+            logging.warning('Invalid tissue name.')
+            return
+
+        mask = self.vf[tissue] > threshold
+        nb_voxels = np.count_nonzero(mask)
+        nupeaks = self.aPeaks.get_nupeaks()
+
+        if nb_voxels == 0:
+            return np.zeros(nupeaks.max() + 1)
+        return np.bincount(nupeaks[mask]) / nb_voxels
+
+
+def compare_nupeaks(sym_nupeaks, asym_nupeaks, volume_frac, wm_th):
     """
     Compare the NuPeaks map for symmetric fODF with the NuPeaks map for
     asymmetric fODF
     """
-    output = ''
-    for i in range(npeaks + 1):
-        mask = sym_nupeaks == i
-        masked_asym_nupeaks = asym_nupeaks[mask]
-        size = masked_asym_nupeaks.size
+    wm_mask = volume_frac[..., -1] > wm_th
+    wm_sym_nupeaks = sym_nupeaks[wm_mask]
+    wm_asym_nupeaks = asym_nupeaks[wm_mask]
+
+    max_npeaks = max(wm_sym_nupeaks.max(), wm_asym_nupeaks.max())
+    comparative_table = np.zeros((max_npeaks + 1, max_npeaks + 1))
+    for i in range(max_npeaks + 1):
+        npeaks_mask = wm_sym_nupeaks == i
+        masked_asym_nupeaks = wm_asym_nupeaks[npeaks_mask]
+        nb_voxels = masked_asym_nupeaks.size
         # Number of occurence of each number of peaks
         bincount = np.bincount(masked_asym_nupeaks)
-        output += 'For sym_nupeaks == {0}\n'.format(i)
-        for j in range(bincount.size):
-            prop = bincount[j] / size * 100.
-            output +=\
-                ' Proportion of asym_nupeaks == {0}: {1} %\n'.format(j, prop)
-    return output
+        comparative_table[i, :bincount.size] = bincount / nb_voxels
+
+    return comparative_table

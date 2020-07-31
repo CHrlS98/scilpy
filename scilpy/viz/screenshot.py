@@ -159,3 +159,15 @@ def prepare_texture_slicer_actor(data, min_value, max_value,
                                     data.shape[1] - 1, 0, 0)
 
     return slicer_actor
+
+
+def create_colormap(nb_colors):
+    cm = np.array(colormap.distinguishable_colormap(
+            bg=(1.0, 0.0, 0.0),
+            exclude=[(0.0, 0.0, 0.0)],
+            nb_colors=nb_colors - 1))
+    cm = np.vstack(([0, 0, 0], cm))
+    lut = colormap.colormap_lookup_table(colors=cm,
+                                         scale_range=(0, nb_colors - 1))
+
+    return lut

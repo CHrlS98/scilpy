@@ -16,9 +16,11 @@ from fury import window, actor
 from scilpy.io.utils import (add_sh_basis_args)
 from scilpy.viz.screenshot import (display_scene,
                                    prepare_texture_slicer_actor,
-                                   crop_data_along_axis)
+                                   crop_data_along_axis,
+                                   create_colormap)
 
-WINDOW_SIZE=(768, 768)
+WINDOW_SIZE = (768, 768)
+
 
 def _build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__,
@@ -55,7 +57,7 @@ def _build_arg_parser():
     p.add_argument('--scale', default=0.5, type=float,
                    help='Scaling factor for FODF.')
 
-    p.add_argument('--radial_scale_off', default=False, 
+    p.add_argument('--radial_scale_off', default=False,
                    action='store_true', help='Disable radial scale for ODF slicer')
 
     p.add_argument('--norm_off', default=False,
@@ -63,6 +65,9 @@ def _build_arg_parser():
 
     p.add_argument('--interactor', default='image', choices={'image', 'trackball'},
                    help='Specify interactor mode for vtk window')
+
+    p.add_argument('--distinguishable', default=False, action='store_true',
+                   help='Use distinguishable colormap for background')
 
     add_sh_basis_args(p)
 
@@ -109,16 +114,22 @@ def main():
     actors.append(odf_actor)
 
     if args.background:
-        bg_img = nib.nifti1.load(args.background)
+        bg_data = nib.nifti1.load(args.background).get_fdata()
+        if args.distinguishable:
+            colormap_lut = create_colormap(int(bg_data.max() + 1))
+            actors.append(actor.scalar_bar(colormap_lut, nb_labels=0))
+        else:
+            colormap_lut = None
         bg_cropped_data =\
-             crop_data_along_axis(bg_img.get_fdata(),
+             crop_data_along_axis(bg_data,
                                   args.slice_index,
                                   args.axis_name)
         bg_actor =\
             prepare_texture_slicer_actor(bg_cropped_data,
                                  args.min_value,
                                  args.max_value,
-                                 args.axis_name)
+                                 args.axis_name,
+                                 colormap_lut=colormap_lut)
         actors.append(bg_actor)
 
     display_scene(actors,

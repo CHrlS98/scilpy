@@ -40,6 +40,9 @@ def _build_arg_parser():
     p.add_argument('--background',
                    help='Optional background image file')
 
+    p.add_argument('--mask',
+                   help='Path to mask')
+
     p.add_argument('--output',
                    help='Path to output file to write')
 
@@ -59,7 +62,8 @@ def _build_arg_parser():
 
 
 def prepare_peaks_slicer_actor(data, orientation):
-    values = np.ones(data.shape[:-1]) * 0.5
+    max_norm = np.linalg.norm(data, axis=-1).max()
+    values = np.ones(data.shape[:-1]) * 0.5 / max_norm
     peaks_slicer = actor.peak_slicer(data, values, symm=False)
     if orientation == 'sagittal':
         peaks_slicer.display_extent(0, 0, 0, data.shape[1], 0, data.shape[2])
@@ -88,6 +92,9 @@ def main():
 
     actors = []
     peaks_data = nib.nifti1.load(args.input).get_fdata()
+    if args.mask:
+        mask = nib.nifti1.load(args.mask).get_fdata().astype(np.bool)
+        peaks_data[np.logical_not(mask)] = 0
     peaks_cropped_data =\
         crop_data_along_axis(peaks_data, args.slice_index, args.axis_name)
     peaks_actor =\
