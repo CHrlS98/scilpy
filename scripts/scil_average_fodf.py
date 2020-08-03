@@ -79,6 +79,11 @@ def _build_arg_parser():
         help='Number of peaks for peak extraction'
     )
 
+    p.add_argument(
+        '--r_threshold', default=0.3, type=float,
+        help='Relative threshold for peak extraction'
+    )
+
     add_sh_basis_args(p)
     add_overwrite_arg(p)
 
@@ -131,11 +136,13 @@ def main():
         FOD.save_to_file(args.avfodf)
     if args.peaks:
         logging.info('Extract peaks')
-        peaks = FOD.extract_peaks(sphere, args.npeaks, 0.0, 0.3)
+        peaks = FOD.extract_peaks(sphere, args.npeaks,
+                                  r_threshold=args.r_threshold)
         peaks.save_to_file(args.peaks)
     if args.nupeaks:
         if not args.peaks:
-            peaks = FOD.extract_peaks(sphere, args.npeaks, 0.0, 0.3)
+            peaks = FOD.extract_peaks(sphere, args.npeaks,
+                                      r_threshold=args.r_threshold)
         peaks.save_nupeaks(args.nupeaks)
     t1 = time.perf_counter()
 

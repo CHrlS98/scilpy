@@ -242,6 +242,7 @@ class AFiberOrientationDistribution(object):
 
         peaks_dirs = np.zeros(list(self.fodf.shape[0:3]) + [npeaks, 3])
         peaks_count = np.zeros(self.fodf.shape[:-1], dtype=np.uint8)
+        peaks_values = np.zeros(list(self.fodf.shape[0:3]) + [npeaks])
         for index in ndindex(self.fodf.shape[:-1]):
             sf = np.dot(self.fodf[index], B)
             sf[sf < a_threshold] = 0.
@@ -250,10 +251,10 @@ class AFiberOrientationDistribution(object):
                                 relative_peak_threshold=r_threshold)
             n = min(npeaks, directions.shape[0])
             peaks_count[index] = n
-            peaks_dirs[index][:n] =\
-                np.multiply(directions[:n], values[:n].reshape(n, 1))
+            peaks_dirs[index][:n] = directions[:n]
+            peaks_values[index][:n] = values[:n]
 
-        return APeaks(peaks_dirs, self.affine, peaks_count)
+        return APeaks(peaks_dirs, self.affine, peaks_count, peaks_values)
 
     def _get_batches_indices(self, batch_size):
         """
@@ -363,7 +364,7 @@ class AFiberOrientationDistribution(object):
 
 
 class APeaks(object):
-    def __init__(self, data, affine, nupeaks=None):
+    def __init__(self, data, affine, nupeaks=None, values=None):
         """
         Build the APeaks object representing peaks
         extracted from asymmetric FODF
@@ -379,6 +380,7 @@ class APeaks(object):
             self.nupeaks =\
                 np.cumsum(np.sum(self.peaks**2, axis=-1) > 0.,
                           axis=-1)[..., -1]
+        self.values = values
         self.labels = None
 
     def get_peaks(self):
@@ -392,6 +394,9 @@ class APeaks(object):
         Save peaks to file 'filename'
         """
         nib.save(nib.Nifti1Image(self.peaks, self.affine), filename)
+        if self.values is not None:
+            fname = filename[:filename.find('.')] + '_values.nii.gz'
+            nib.save(nib.Nifti1Image(self.values, self.affine), fname)
 
     def save_nupeaks(self, filename):
         """
