@@ -561,7 +561,8 @@ class AFODMetricsPopper(object):
         mask = self.vf[tissue] > threshold
         nupeaks = self.aPeaks.get_nupeaks()
         if nupeaks[mask].size > 0:
-            ratio = np.count_nonzero(nupeaks[mask] > 2) / nupeaks[mask].size
+            ratio = np.count_nonzero(nupeaks[mask] > 2) /\
+                    np.count_nonzero(nupeaks[mask])
         else:
             ratio = 0.0
 

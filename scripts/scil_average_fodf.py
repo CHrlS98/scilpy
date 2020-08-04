@@ -43,45 +43,52 @@ def _build_arg_parser():
                    help='Output path of NuPeaks file')
 
     p.add_argument('--epsilon', default=1e-16, type=float,
-                   help='Float epsilon for removing false positives')
+                   help='Float epsilon for removing false positives '
+                   '[%(default)s]')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
-        help='SH order of the input (Default: 8)')
+        help='SH order of the input [%(default)s]')
 
     p.add_argument(
         '--sphere', default='symmetric724',
-        help='Sphere used for the SH reprojection'
+        help='Sphere used for the SH reprojection [%(default)s]'
     )
 
     p.add_argument(
         '--sharpness', default=1.0, type=float,
         help='Specify sharpness factor to use for weighted average'
+        ' [%(default)s]'
     )
 
     p.add_argument(
         '--batch_size', default=10, type=int,
-        help='Size of batches when computing average (at least 3)'
+        help='Size of batches when computing average [%(default)s]'
     )
 
     p.add_argument(
         '--sigma', default=1.0, type=float,
-        help='Sigma of the gaussian to use'
+        help='Sigma of the gaussian to use [%(default)s]'
     )
 
     p.add_argument(
-        '--mask', default=False, action='store_true',
-        help='Mask null fodf'
+        '--mask_off', default=False, action='store_true',
+        help='Mask null fodf [%(default)s]'
     )
 
     p.add_argument(
         '--npeaks', default=10, type=int,
-        help='Number of peaks for peak extraction'
+        help='Number of peaks for peak extraction [%(default)s]'
+    )
+
+    p.add_argument(
+        '--a_threshold', default=0.0, type=float,
+        help='Absolute threshold for peak extraction [%(default)s]'
     )
 
     p.add_argument(
         '--r_threshold', default=0.3, type=float,
-        help='Relative threshold for peak extraction'
+        help='Relative threshold for peak extraction [%(default)s]'
     )
 
     add_sh_basis_args(p)
@@ -132,16 +139,18 @@ def main():
     if args.avfodf:
         logging.info('Average FODF')
         FOD.average(sphere, dot_sharpness=args.sharpness, sigma=args.sigma,
-                    batch_size=args.batch_size, mask=args.mask)
+                    batch_size=args.batch_size, mask=(not args.mask_off))
         FOD.save_to_file(args.avfodf)
     if args.peaks:
         logging.info('Extract peaks')
         peaks = FOD.extract_peaks(sphere, args.npeaks,
+                                  a_threshold=args.a_threshold,
                                   r_threshold=args.r_threshold)
         peaks.save_to_file(args.peaks)
     if args.nupeaks:
         if not args.peaks:
             peaks = FOD.extract_peaks(sphere, args.npeaks,
+                                      a_threshold=args.a_threshold,
                                       r_threshold=args.r_threshold)
         peaks.save_nupeaks(args.nupeaks)
     t1 = time.perf_counter()

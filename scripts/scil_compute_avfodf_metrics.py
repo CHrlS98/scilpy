@@ -56,11 +56,12 @@ def _build_arg_parser():
                    help='Output path of the NuPeaks proportions file')
 
     p.add_argument('--wm_th', default=0.30, type=float,
-                   help='WM threshold in volume fraction map for WM mask')
+                   help='WM threshold in volume fraction map for WM mask'
+                   ' [%(default)s]')
 
     p.add_argument(
         '--sh_order', metavar='int', default=8, type=int,
-        help='SH order of the input (Default: 8)')
+        help='SH order of the input (Default: [%(default)s])')
 
     add_sh_basis_args(p)
     add_overwrite_arg(p)
