@@ -42,6 +42,9 @@ def _build_arg_parser():
     p.add_argument('--nupeaks',
                    help='Output path of NuPeaks file')
 
+    p.add_argument('--out_mask',
+                   help='Out path of FODF mask')
+
     p.add_argument('--epsilon', default=1e-16, type=float,
                    help='Float epsilon for removing false positives '
                    '[%(default)s]')
@@ -111,6 +114,8 @@ def main():
         outputs.append(args.peaks)
     if args.nupeaks:
         outputs.append(args.nupeaks)
+    if args.out_mask:
+        outputs.append(args.out_mask)
     if not outputs:
         parser.error('No output to be done.')
 
@@ -136,6 +141,9 @@ def main():
         logging.info('Cleaning FODF')
         FOD.clean_false_pos(args.epsilon)
         FOD.save_to_file(args.rm_false_pos)
+    if args.out_mask:
+        nib.save(nib.Nifti1Image(FOD.get_mask().astype(np.uint8), affine),
+                 args.out_mask)
     if args.avfodf:
         logging.info('Average FODF')
         FOD.average(sphere, dot_sharpness=args.sharpness, sigma=args.sigma,

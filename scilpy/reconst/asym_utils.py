@@ -30,7 +30,7 @@ def ncoef_from_order(sh_order, sh_basis):
 
 
 class AFiberOrientationDistribution(object):
-    def __init__(self, fodf, affine, sh_basis, sh_order):
+    def __init__(self, fodf, affine, sh_basis, sh_order, eps=1e-16):
         """
         Build the AFiberOrientationDistribution object
 
@@ -47,7 +47,7 @@ class AFiberOrientationDistribution(object):
             The maximum order of the SH basis
         """
         self.fodf = fodf
-        self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
+        self.mask = np.linalg.norm(self.fodf, axis=-1) > eps
         self.affine = affine
         self.sh_basis = sh_basis
         self.sh_order = sh_order
@@ -152,6 +152,9 @@ class AFiberOrientationDistribution(object):
         image = nib.Nifti1Image(self.fodf.astype(np.float32), self.affine)
         image.to_filename(filename)
 
+    def get_mask(self):
+        return self.mask
+
     def compute_odd_on_full_coeffs_ratio(self):
         """
         Measure the asymmetry of the FODF per voxel.
@@ -213,7 +216,6 @@ class AFiberOrientationDistribution(object):
         than epsilon and recompute mask
         """
         self.fodf[self.fodf[..., 0] < epsilon] = 0.0
-        self.mask = np.linalg.norm(self.fodf, axis=-1) > 0
 
     def extract_peaks(self, sphere, npeaks=10, a_threshold=0.0,
                       r_threshold=0.5):
@@ -395,7 +397,7 @@ class APeaks(object):
         """
         nib.save(nib.Nifti1Image(self.peaks, self.affine), filename)
         if self.values is not None:
-            fname = filename[:filename.find('.')] + '_values.nii.gz'
+            fname = filename[:filename.find('.nii')] + '_values.nii.gz'
             nib.save(nib.Nifti1Image(self.values, self.affine), fname)
 
     def save_nupeaks(self, filename):
@@ -601,12 +603,12 @@ class AFODMetricsPopper(object):
         return np.bincount(nupeaks[mask]) / nb_voxels
 
 
-def compare_nupeaks(sym_nupeaks, asym_nupeaks, volume_frac, wm_th):
+def compare_nupeaks(sym_nupeaks, asym_nupeaks, mask):
     """
     Compare the NuPeaks map for symmetric fODF with the NuPeaks map for
     asymmetric fODF
     """
-    wm_mask = volume_frac[..., -1] > wm_th
+    wm_mask = mask
     wm_sym_nupeaks = sym_nupeaks[wm_mask]
     wm_asym_nupeaks = asym_nupeaks[wm_mask]
 
