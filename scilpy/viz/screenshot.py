@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from fury import window, actor, colormap
+from fury import window, actor, colormap, io
 import numpy as np
 
 
@@ -40,7 +40,7 @@ def display_slices(volume_actor, slices,
                     fname=output_filename)
 
 
-def prepare_scene(axis_name, shape):
+def prepare_scene(axis_name, shape, slice_index):
     """
     Prepare scene and camera for visualizing slice in axis_name orientation
     """
@@ -48,7 +48,7 @@ def prepare_scene(axis_name, shape):
         view_position = [-280.0,
                          (shape[1] - 1) / 2.0,
                          (shape[2] - 1) / 2.0]
-        view_center = [(shape[0] - 1) / 2.0,
+        view_center = [slice_index,
                        (shape[1] - 1) / 2.0,
                        (shape[2] - 1) / 2.0]
         view_up = [0.0, 0.0, 1.0]
@@ -58,7 +58,7 @@ def prepare_scene(axis_name, shape):
                          280.0,
                          (shape[2] - 1) / 2.0]
         view_center = [(shape[0] - 1) / 2.0,
-                       (shape[1] - 1) / 2.0,
+                       slice_index,
                        (shape[2] - 1) / 2.0]
         view_up = [0.0, 0.0, 1.0]
         zoom_factor = 2.0 / shape[0] if shape[0] > shape[2] else 2.0 / shape[2]
@@ -68,15 +68,12 @@ def prepare_scene(axis_name, shape):
                          -280.0]
         view_center = [(shape[0] - 1) / 2.0,
                        (shape[1] - 1) / 2.0,
-                       (shape[2] - 1) / 2.0]
+                       slice_index]
         view_up = [0.0, 1.0, 0.0]
         zoom_factor = 2.0 / shape[0] if shape[0] > shape[1] else 2.0 / shape[1]
 
     scene = window.Scene()
     scene.projection('parallel')
-    print('view_pos: ', view_position)
-    print('view_center: ', view_center)
-    print('view_up: ', view_up)
     scene.set_camera(position=view_position,
                      focal_point=view_center,
                      view_up=view_up)
@@ -98,23 +95,27 @@ def crop_data_along_axis(data, idx, axis_name):
 
 
 def display_scene(actors, shape, window_size, orientation,
-                  interactor, output, title):
+                  interactor, output, title, silent=False,
+                  slice_index=0):
     """
     Prepare and display a scene containing 'actors'
     """
-    scene = prepare_scene(orientation, shape)
-    showm = window.ShowManager(scene, size=window_size,
-                               title=title,
-                               reset_camera=False,
-                               interactor_style=interactor)
+    scene = prepare_scene(orientation, shape, slice_index)
+    if not silent:
+        showm = window.ShowManager(scene, size=window_size,
+                                   title=title,
+                                   reset_camera=False,
+                                   interactor_style=interactor)
     for actor in actors:
         scene.add(actor)
 
-    showm.initialize()
-    showm.start()
+    if not silent:
+        showm.initialize()
+        showm.start()
 
     if output:
-        window.snapshot(scene, fname=output, size=window_size)
+        out_img = window.snapshot(scene, size=window_size)
+        io.save_image(out_img[::-1], output)
 
 
 def get_translation_matrix(translation):
@@ -125,7 +126,8 @@ def get_translation_matrix(translation):
 
 
 def prepare_texture_slicer_actor(data, min_value, max_value,
-                                 axis_name, colormap_lut=None):
+                                 axis_name, colormap_lut=None,
+                                 slice_index=0, offset=0.5):
     value_range = [data.min(), data.max()]
     if min_value is not None:
         value_range[0] = min_value
@@ -136,27 +138,30 @@ def prepare_texture_slicer_actor(data, min_value, max_value,
     if axis_name == 'sagittal':
         slicer_actor =\
             actor.slicer(data,
-                         affine=get_translation_matrix((1.0, 0.0, 0.0)),
+                         affine=get_translation_matrix((offset, 0.0, 0.0)),
                          value_range=value_range, interpolation='nearest',
                          lookup_colormap=colormap_lut)
-        slicer_actor.display_extent(0, 0, 0, data.shape[1] - 1,
+        slicer_actor.display_extent(slice_index, slice_index,
+                                    0, data.shape[1] - 1,
                                     0, data.shape[2] - 1)
     elif axis_name == 'coronal':
         slicer_actor =\
              actor.slicer(data,
-                          affine=get_translation_matrix((0.0, -1.0, 0.0)),
+                          affine=get_translation_matrix((0.0, -offset, 0.0)),
                           value_range=value_range, interpolation='nearest',
                           lookup_colormap=colormap_lut)
-        slicer_actor.display_extent(0, data.shape[0] - 1, 0, 0,
+        slicer_actor.display_extent(0, data.shape[0] - 1,
+                                    slice_index, slice_index,
                                     0, data.shape[2] - 1)
     elif axis_name == 'axial':
         slicer_actor =\
             actor.slicer(data,
-                         affine=get_translation_matrix((0.0, 0.0, 1.0)),
+                         affine=get_translation_matrix((0.0, 0.0, offset)),
                          value_range=value_range, interpolation='nearest',
                          lookup_colormap=colormap_lut)
-        slicer_actor.display_extent(0, data.shape[0] - 1, 0,
-                                    data.shape[1] - 1, 0, 0)
+        slicer_actor.display_extent(0, data.shape[0] - 1,
+                                    0, data.shape[1] - 1,
+                                    slice_index, slice_index)
 
     return slicer_actor
 
