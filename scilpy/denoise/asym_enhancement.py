@@ -52,8 +52,11 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     sphere = get_sphere(sphere_str)
 
     # Convert to spherical function
-    B = sh_to_sf_matrix(sphere, sh_order=sh_order, basis_type=sh_basis,
-                        use_full_basis=in_full_basis, return_inv=False)
+    in_sh_basis = sh_basis
+    if in_full_basis:
+        in_sh_basis += '_full'
+    B = sh_to_sf_matrix(sphere, sh_order=sh_order, basis_type=in_sh_basis,
+                        return_inv=False)
     sf = np.array([np.dot(i, B) for i in fodf], dtype='float32')
 
     # Initialize array for mean SF with current voxel value
@@ -90,8 +93,12 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     # Release sf array from memory before instantiating output fODF array
     del sf
 
-    _, B_inv = sh_to_sf_matrix(sphere, sh_order=sh_order, basis_type=sh_basis,
-                               use_full_basis=out_full_basis)
+    # Convert back to SH coefficients
+    out_sh_basis = sh_basis
+    if out_full_basis:
+        out_sh_basis += '_full'
+    _, B_inv = sh_to_sf_matrix(sphere, sh_order=sh_order,
+                               basis_type=out_sh_basis)
     if mask is not None:
         avafodf = np.zeros(
             np.append(fodf.shape[:-1], [B_inv.shape[-1]]),
