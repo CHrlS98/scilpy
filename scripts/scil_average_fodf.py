@@ -11,50 +11,32 @@ import logging
 
 import nibabel as nib
 import numpy as np
-import matplotlib.pyplot as plt
-
-from dipy.data import get_sphere
-from dipy.direction.peaks import reshape_peaks_for_visualization
 
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
 
-from scilpy.reconst.asym_utils import (AFiberOrientationDistribution,
-                                       APeaks)
+from scilpy.denoise.asym_enhancement import (average_fodf_asymmetrically)
 
 
 def _build_arg_parser():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
 
-    p.add_argument('input',
+    p.add_argument('in_fodf',
                    help='Path to the input file')
 
-    p.add_argument('--avfodf',
+    p.add_argument('out_avafodf',
                    help='Output path of averaged fODF')
 
-    p.add_argument('--rm_false_pos',
-                   help='Output path of cleaned fODF file.')
-
-    p.add_argument('--peaks',
-                   help='Output path of peak directions file')
-
-    p.add_argument('--nupeaks',
-                   help='Output path of NuPeaks file')
-
-    p.add_argument('--out_mask',
-                   help='Out path of FODF mask')
-
-    p.add_argument('--epsilon', default=1e-16, type=float,
-                   help='Float epsilon for removing false positives '
-                   '[%(default)s]')
+    p.add_argument('--mask',
+                   help='Path to a mask to apply on output')
 
     p.add_argument(
-        '--sh_order', metavar='int', default=8, type=int,
+        '--sh_order', default=8, type=int,
         help='SH order of the input [%(default)s]')
 
     p.add_argument(
-        '--sphere', default='symmetric724',
+        '--sphere', default='symmetric724', type=str,
         help='Sphere used for the SH reprojection [%(default)s]'
     )
 
@@ -65,33 +47,25 @@ def _build_arg_parser():
     )
 
     p.add_argument(
-        '--batch_size', default=10, type=int,
-        help='Size of batches when computing average [%(default)s]'
-    )
-
-    p.add_argument(
         '--sigma', default=1.0, type=float,
         help='Sigma of the gaussian to use [%(default)s]'
     )
 
     p.add_argument(
-        '--mask_off', default=False, action='store_true',
-        help='Mask null fodf [%(default)s]'
+        '--in_full_basis', default='False',
+        choices=['True', 'False'], type=str,
+        help='True if input fODF is in full SH basis [%(default)s]'
     )
 
     p.add_argument(
-        '--npeaks', default=10, type=int,
-        help='Number of peaks for peak extraction [%(default)s]'
+        '--out_full_basis', default='True',
+        choices=['True', 'False'], type=str,
+        help='True if output fODF is in full SH basis [%(default)s]'
     )
 
     p.add_argument(
-        '--a_threshold', default=0.0, type=float,
-        help='Absolute threshold for peak extraction [%(default)s]'
-    )
-
-    p.add_argument(
-        '--r_threshold', default=0.3, type=float,
-        help='Relative threshold for peak extraction [%(default)s]'
+        '--batch_size', default=10, type=int,
+        help='Size of batches when computing average [%(default)s]'
     )
 
     add_sh_basis_args(p)
@@ -105,62 +79,41 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
-    outputs = []
-    if args.avfodf:
-        outputs.append(args.avfodf)
-    if args.rm_false_pos:
-        outputs.append(args.rm_false_pos)
-    if args.peaks:
-        outputs.append(args.peaks)
-    if args.nupeaks:
-        outputs.append(args.nupeaks)
-    if args.out_mask:
-        outputs.append(args.out_mask)
-    if not outputs:
-        parser.error('No output to be done.')
+    inputs = []
+    inputs.append(args.in_fodf)
+    if args.mask:
+        inputs.append(args.mask)
 
     # Checking args
-    assert_inputs_exist(parser, args.input)
-    assert_outputs_exist(parser, args, outputs, check_dir_exists=True)
+    assert_inputs_exist(parser, inputs)
+    assert_outputs_exist(parser, args, args.out_avafodf,
+                         check_dir_exists=True)
 
     # Prepare data
-    sphere = get_sphere(args.sphere)
-    img = nib.nifti1.load(args.input)
+    fodf_img = nib.nifti1.load(args.in_fodf)
+    fodf_data = fodf_img.get_fdata().astype(np.float32)
 
-    img_data = img.get_fdata()
-    affine = img.affine
+    mask_data = None
+    if args.mask:
+        mask_data = nib.nifti1.load(args.mask).get_fdata().astype(np.bool)
 
-    FOD = AFiberOrientationDistribution(img_data,
-                                        affine,
-                                        args.sh_basis,
-                                        args.sh_order)
-
-    # Computing neighbors average of fODFs
+    # Computing neighbors asymmetric average of fODFs
     t0 = time.perf_counter()
-    if args.rm_false_pos:
-        logging.info('Cleaning FODF')
-        FOD.clean_false_pos(args.epsilon)
-        FOD.save_to_file(args.rm_false_pos)
-    if args.out_mask:
-        nib.save(nib.Nifti1Image(FOD.get_mask().astype(np.uint8), affine),
-                 args.out_mask)
-    if args.avfodf:
-        logging.info('Average FODF')
-        FOD.average(sphere, dot_sharpness=args.sharpness, sigma=args.sigma,
-                    batch_size=args.batch_size, mask=(not args.mask_off))
-        FOD.save_to_file(args.avfodf)
-    if args.peaks:
-        logging.info('Extract peaks')
-        peaks = FOD.extract_peaks(sphere, args.npeaks,
-                                  a_threshold=args.a_threshold,
-                                  r_threshold=args.r_threshold)
-        peaks.save_to_file(args.peaks)
-    if args.nupeaks:
-        if not args.peaks:
-            peaks = FOD.extract_peaks(sphere, args.npeaks,
-                                      a_threshold=args.a_threshold,
-                                      r_threshold=args.r_threshold)
-        peaks.save_nupeaks(args.nupeaks)
+    logging.info('Computing asymmetric averaged fODF')
+    in_full_basis = args.in_full_basis == 'True'
+    out_full_basis = args.out_full_basis == 'True'
+    avafodf =\
+        average_fodf_asymmetrically(fodf_data,
+                                    sh_order=args.sh_order,
+                                    sh_basis=args.sh_basis,
+                                    sphere_str=args.sphere,
+                                    in_full_basis=in_full_basis,
+                                    out_full_basis=out_full_basis,
+                                    dot_sharpness=args.sharpness,
+                                    sigma=args.sigma, mask=mask_data,
+                                    batch_size=args.batch_size)
+    nib.save(nib.Nifti1Image(avafodf.astype(np.float), fodf_img.affine),
+             args.out_avafodf)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0
