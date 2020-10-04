@@ -43,7 +43,7 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     # Load the sphere used for projection of SH
     sphere = get_sphere(sphere_str)
     # Normalized filter for each sf direction
-    weigths = _get_weights2(sphere, dot_sharpness, sigma)
+    weigths = _get_weights(sphere, dot_sharpness, sigma)
     c_w_per_sf, n_w_per_sf = weigths
 
     # Detect if the basis is full based on its order
