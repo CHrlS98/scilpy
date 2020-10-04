@@ -3,13 +3,13 @@
 import numpy as np
 from dipy.reconst.shm import sh_to_sf_matrix
 from dipy.data import get_sphere
-from dipy.core.sphere import Sphere
 from scipy.ndimage import correlate
 
 
 def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
-                                sphere_str='repulsion724', dot_sharpness=1.0,
-                                sigma=1.0, mask=None):
+                                sphere_str='repulsion724', in_full_basis=False,
+                                out_full_basis=True, dot_sharpness=1.0,
+                                sigma=1.0, mask=None, batch_size=10):
     """Average the fODF projected on a sphere using a first-neighbor gaussian
     blur and a dot product weight between sphere directions and the direction
     to neighborhood voxels, forcing to 0 negative values and thus performing
@@ -25,12 +25,20 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
         SH basis of the fODF. Default: 'descoteaux07'
     sphere_str: str
         Name of the Sphere to use to project SH coefficients to SF.
-        Default: 'repulsion724'
+        Default: 'symmetric724'
+    in_full_basis: bool, optional
+        True if input SH coefficients are in a full SH basis. Default: False
+    out_full_basis: bool, optional
+        True if output SH coefficients are in a full SH basis. Default: True
     dot_sharpness: float, optional
         Exponent of the dot product. When set to 0.0, directions
         are not weighted by the dot product. Default: 1.0
     sigma: float, optional
         Variance of the gaussian. Default: 1.0
+    batch_size: int, optional
+        Number of volume slices processed at a same time. The
+        last batch to be processed can be of a size up to
+        (batch_size * 2.0 - 1). Default: 10
     mask: ndarray, optional
         If supplied, forces to 0 fODF in voxels outside mask. Default: None
 
@@ -38,44 +46,35 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     -------
     avafodf: ndarray (x, y, z, n_coeffs)
         Asymmetric averaged fODF represented with the SH basis `sh_basis`.
-        The output fODF in returned in a full basis
+        If `out_full_basis`, a full SH basis is used for reconstructing the
+        output fODF.
     """
     # Load the sphere used for projection of SH
     sphere = get_sphere(sphere_str)
-    # Normalized filter for each sf direction
-    weigths = _get_weights(sphere, dot_sharpness, sigma)
-    c_w_per_sf, n_w_per_sf = weigths
+    w_per_sf = _get_weights2(sphere, dot_sharpness, sigma)
 
-    # Detect if the basis is full based on its order
-    # and the number of coefficients of the SH
+    # Convert to spherical function
     in_sh_basis = sh_basis
-    if fodf.shape[-1] == (sh_order + 1)**2:
+    if in_full_basis:
         in_sh_basis += '_full'
+    B = sh_to_sf_matrix(sphere, sh_order=sh_order, basis_type=in_sh_basis,
+                        return_inv=False)
 
     img_shape = fodf.shape[:-1]
     nb_sf = len(sphere.vertices)
     mean_sf = np.zeros((img_shape[0], img_shape[1], img_shape[2], nb_sf))
-    B = sh_to_sf_matrix(sphere, sh_order=sh_order, basis_type=in_sh_basis,
-                        return_inv=False)
-
-    # We want a B matrix to project on an inverse sphere to have the sf on
-    # the opposite hemisphere for a given vertice
-    neg_B = sh_to_sf_matrix(Sphere(xyz=-sphere.vertices), sh_order=sh_order,
-                            basis_type=in_sh_basis, return_inv=False)
 
     for sf_i in range(nb_sf):
-        # first pass: filtering opposite hemispheres
-        current_sf = np.dot(fodf, neg_B[:, sf_i])
-        w_filter = n_w_per_sf[sf_i]
-        mean_sf[..., sf_i] = correlate(current_sf, w_filter, mode="constant")
-
-        # second pass: apply weight of center sf
-        current_sf = np.dot(fodf, B[:, sf_i])
-        w_filter = c_w_per_sf[sf_i]
-        mean_sf[..., sf_i] += correlate(current_sf, w_filter, mode="constant")
+        current_sf = np.array([np.dot(i, B[:, sf_i]) for i in fodf], dtype='float64')
+        # we could adapt the w_filter locally for the mask and weighted
+        w_filter = w_per_sf[sf_i]
+        w_filter /= w_filter.sum()
+        mean_sf[..., sf_i] = correlate(current_sf, w_filter, mode="constant", cval=0)
 
     # Convert back to SH coefficients
-    out_sh_basis = sh_basis + '_full'
+    out_sh_basis = sh_basis
+    if out_full_basis:
+        out_sh_basis += '_full'
     _, B_inv = sh_to_sf_matrix(sphere, sh_order=sh_order,
                                basis_type=out_sh_basis)
     if mask is not None:
@@ -90,7 +89,7 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     return avafodf
 
 
-def _get_weights(sphere, dot_sharpness, sigma):
+def _get_weights2(sphere, dot_sharpness, sigma):
     """
     Get neighbors weight in respect to the direction to a voxel
 
@@ -124,17 +123,6 @@ def _get_weights(sphere, dot_sharpness, sigma):
     d_weights = np.where(d_weights > 0.0, d_weights**dot_sharpness, 0.0)
     weights = d_weights * g_weights.T
     weights[:, 13] = 1.0
-    # normalize filter right here
-    weights /= weights.sum(axis=-1, keepdims=True)
 
-    # Filter for center voxel
-    c_weights = np.zeros_like(weights)
-    c_weights[:, 13] = weights[:, 13]
-    c_weights = c_weights.reshape((len(sphere.vertices), 3, 3, 3))
-
-    # Filter for neighbors
-    n_weights = np.copy(weights)
-    n_weights[:, 13] = 0.0
-    n_weights = n_weights.reshape((len(sphere.vertices), 3, 3, 3))
-
-    return c_weights, n_weights
+    weights = weights.reshape((len(sphere.vertices), 3, 3, 3))
+    return weights
