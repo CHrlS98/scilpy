@@ -3,12 +3,13 @@
 import numpy as np
 from dipy.reconst.shm import sh_to_sf_matrix
 from dipy.data import get_sphere
+from dipy.core.sphere import Sphere
+from scipy.ndimage import correlate
 
 
 def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
-                                sphere_str='symmetric724', in_full_basis=False,
-                                out_full_basis=True, dot_sharpness=1.0,
-                                sigma=1.0, mask=None, batch_size=10):
+                                sphere_str='repulsion724', dot_sharpness=1.0,
+                                sigma=1.0, mask=None):
     """Average the fODF projected on a sphere using a first-neighbor gaussian
     blur and a dot product weight between sphere directions and the direction
     to neighborhood voxels, forcing to 0 negative values and thus performing
@@ -25,19 +26,11 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     sphere_str: str
         Name of the Sphere to use to project SH coefficients to SF.
         Default: 'symmetric724'
-    in_full_basis: bool, optional
-        True if input SH coefficients are in a full SH basis. Default: False
-    out_full_basis: bool, optional
-        True if output SH coefficients are in a full SH basis. Default: True
     dot_sharpness: float, optional
         Exponent of the dot product. When set to 0.0, directions
         are not weighted by the dot product. Default: 1.0
     sigma: float, optional
         Variance of the gaussian. Default: 1.0
-    batch_size: int, optional
-        Number of volume slices processed at a same time. The
-        last batch to be processed can be of a size up to
-        (batch_size * 2.0 - 1). Default: 10
     mask: ndarray, optional
         If supplied, forces to 0 fODF in voxels outside mask. Default: None
 
@@ -45,58 +38,44 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     -------
     avafodf: ndarray (x, y, z, n_coeffs)
         Asymmetric averaged fODF represented with the SH basis `sh_basis`.
-        If `out_full_basis`, a full SH basis is used for reconstructing the
-        output fODF.
+        The output fODF in returned in a full basis
     """
     # Load the sphere used for projection of SH
     sphere = get_sphere(sphere_str)
+    # Normalized filter for each sf direction
+    weigths = _get_weights2(sphere, dot_sharpness, sigma)
+    c_w_per_sf, n_w_per_sf = weigths
 
-    # Convert to spherical function
+    # Detect if the basis is full based on its order
+    # and the number of coefficients of the SH
     in_sh_basis = sh_basis
-    if in_full_basis:
+    if fodf.shape[-1] == (sh_order + 1)**2:
         in_sh_basis += '_full'
+
+    img_shape = fodf.shape[:-1]
+    nb_sf = len(sphere.vertices)
+    mean_sf = np.zeros((img_shape[0], img_shape[1], img_shape[2], nb_sf))
     B = sh_to_sf_matrix(sphere, sh_order=sh_order, basis_type=in_sh_basis,
                         return_inv=False)
-    sf = np.array([np.dot(i, B) for i in fodf], dtype='float32')
 
-    # Initialize array for mean SF with current voxel value
-    mean_sf = np.copy(sf)
+    # We want a B matrix to project on an inverse sphere to have the sf on
+    # the opposite hemisphere for a given vertice
+    neg_B = sh_to_sf_matrix(Sphere(xyz=-sphere.vertices), sh_order=sh_order,
+                            basis_type=in_sh_basis, return_inv=False)
 
-    # Zero-pad sf data
-    sf = np.pad(sf, ((1, 1), (1, 1), (1, 1), (0, 0)),
-                mode='constant', constant_values=0.0)
+    for sf_i in range(nb_sf):
+        # first pass: filtering opposite hemispheres
+        current_sf = np.dot(fodf, neg_B[:, sf_i])
+        w_filter = n_w_per_sf[sf_i]
+        mean_sf[..., sf_i] = correlate(current_sf, w_filter, mode="constant")
 
-    # Prepare batch
-    batch_indices = _get_batches_indices(fodf.shape, batch_size)
-    w_by_dir, norm_w = _get_weights(sphere, dot_sharpness, sigma)
-
-    # Compute average in batches
-    # TODO: Apply hemisphere to opposite hemisphere
-    for index in batch_indices:
-        batch = sf[index]
-        dim = tuple(np.array(batch.shape[:-1]) - np.array([2, 2, 2]))
-
-        for w in w_by_dir:
-            direction = np.array([w])
-            weight = w_by_dir[w]
-
-            i, j, k = int(w[0] + 1), int(w[1] + 1), int(w[2] + 1)
-            mean_sf[index[0]:index[0] + dim[0]] +=\
-                np.multiply(batch[i:dim[0]+i, j:dim[1]+j, k:dim[2]+k],
-                            weight)
-
-        mean_sf[index[0]:index[0] + dim[0]] =\
-            np.multiply(
-                mean_sf[index[0]:index[0] + dim[0]],
-                1.0 / (norm_w + 1.0))
-
-    # Release sf array from memory before instantiating output fODF array
-    del sf
+        # second pass: apply weight of center sf
+        current_sf = np.dot(fodf, B[:, sf_i])
+        w_filter = c_w_per_sf[sf_i]
+        mean_sf[..., sf_i] += correlate(current_sf, w_filter, mode="constant")
 
     # Convert back to SH coefficients
-    out_sh_basis = sh_basis
-    if out_full_basis:
-        out_sh_basis += '_full'
+    out_sh_basis = sh_basis + '_full'
     _, B_inv = sh_to_sf_matrix(sphere, sh_order=sh_order,
                                basis_type=out_sh_basis)
     if mask is not None:
@@ -109,25 +88,6 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
         avafodf = np.array([np.dot(i, B_inv) for i in mean_sf])
 
     return avafodf
-
-
-def _get_directions_to_voxels():
-    """
-    Get the vectors to neighboor voxels
-
-    Returns
-    -------
-    directions: array (26, 3)
-        array of directions from center of voxel to neighboors
-    """
-    # center directions around current voxel
-    directions = np.transpose(np.indices((3, 3, 3)) - np.ones((3, 3, 3)))
-    directions = np.reshape(directions, (27, 3))
-
-    # remove direction (0, 0, 0)
-    directions = np.delete(directions, 13, 0)
-
-    return directions
 
 
 def _get_weights(sphere, dot_sharpness, sigma):
@@ -150,50 +110,31 @@ def _get_weights(sphere, dot_sharpness, sigma):
     norm: array
         per vertex norm of weights
     """
-    directions = _get_directions_to_voxels()
-    dir_norms = np.linalg.norm(directions, axis=-1, keepdims=True)
-    normalized_dir = directions/dir_norms
+    directions = np.transpose(np.indices((3, 3, 3)) - np.ones((3, 3, 3)))
+    directions = np.reshape(directions, (27, 3))
+    non_zero_dir = np.ones([27], dtype=bool)
+    non_zero_dir[13] = False
 
-    g_weights = np.exp(-dir_norms**2 / (2 * sigma**2))
-    d_weights = np.dot(sphere.vertices, normalized_dir.T)
+    # normalize dir
+    dir_norm = np.linalg.norm(directions, axis=-1, keepdims=True)
+    directions[non_zero_dir] /= dir_norm[non_zero_dir]
+
+    g_weights = np.exp(-dir_norm**2 / (2 * sigma**2))
+    d_weights = np.dot(sphere.vertices, directions.T)
     d_weights = np.where(d_weights > 0.0, d_weights**dot_sharpness, 0.0)
+    weights = d_weights * g_weights.T
+    weights[:, 13] = 1.0
+    # normalize filter right here
+    weights /= weights.sum(axis=-1, keepdims=True)
 
-    weights = np.multiply(d_weights, g_weights.T)
-    norm = np.sum(weights, axis=-1)
+    # Filter for center voxel
+    c_weights = np.zeros_like(weights)
+    c_weights[:, 13] = weights[:, 13]
+    c_weights = c_weights.reshape((len(sphere.vertices), 3, 3, 3))
 
-    dir_keys = list(map(tuple, directions))
-    weights_by_dir = dict(zip(dir_keys, list(weights.T)))
+    # Filter for neighbors
+    n_weights = np.copy(weights)
+    n_weights[:, 13] = 0.0
+    n_weights = n_weights.reshape((len(sphere.vertices), 3, 3, 3))
 
-    return weights_by_dir, norm
-
-
-def _get_batches_indices(fodf_shape, batch_size):
-    """
-    Get the index of slices of data set along the first axis
-
-    Parameters
-    ----------
-    fodf_shape: tuple
-        Shape of fODF array
-    batch_size: int
-        Number of slices per batch
-
-    Returns
-    ------
-    split_indices: list
-        List of indices for each batch
-    """
-    nb_slices = fodf_shape[0]
-    pad_width = 2
-
-    number_of_batches = int(nb_slices / batch_size + 1.0)
-    indices = np.arange(number_of_batches * batch_size + pad_width)
-    split_indices = []
-    for batch_id in range(number_of_batches):
-        start = batch_size * batch_id
-        split_indices.append(indices[start:start + batch_size + pad_width])
-
-    split_indices[-1] =\
-        split_indices[-1][split_indices[-1] < nb_slices + pad_width]
-
-    return split_indices
+    return c_weights, n_weights

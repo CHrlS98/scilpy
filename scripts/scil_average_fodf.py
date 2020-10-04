@@ -36,7 +36,7 @@ def _build_arg_parser():
         help='SH order of the input [%(default)s]')
 
     p.add_argument(
-        '--sphere', default='symmetric724', type=str,
+        '--sphere', default='repulsion724', type=str,
         help='Sphere used for the SH reprojection [%(default)s]'
     )
 
@@ -49,23 +49,6 @@ def _build_arg_parser():
     p.add_argument(
         '--sigma', default=1.0, type=float,
         help='Sigma of the gaussian to use [%(default)s]'
-    )
-
-    p.add_argument(
-        '--in_full_basis', default='False',
-        choices=['True', 'False'], type=str,
-        help='True if input fODF is in full SH basis [%(default)s]'
-    )
-
-    p.add_argument(
-        '--out_full_basis', default='True',
-        choices=['True', 'False'], type=str,
-        help='True if output fODF is in full SH basis [%(default)s]'
-    )
-
-    p.add_argument(
-        '--batch_size', default=10, type=int,
-        help='Size of batches when computing average [%(default)s]'
     )
 
     add_sh_basis_args(p)
@@ -100,18 +83,14 @@ def main():
     # Computing neighbors asymmetric average of fODFs
     t0 = time.perf_counter()
     logging.info('Computing asymmetric averaged fODF')
-    in_full_basis = args.in_full_basis == 'True'
-    out_full_basis = args.out_full_basis == 'True'
-    avafodf =\
-        average_fodf_asymmetrically(fodf_data,
-                                    sh_order=args.sh_order,
-                                    sh_basis=args.sh_basis,
-                                    sphere_str=args.sphere,
-                                    in_full_basis=in_full_basis,
-                                    out_full_basis=out_full_basis,
-                                    dot_sharpness=args.sharpness,
-                                    sigma=args.sigma, mask=mask_data,
-                                    batch_size=args.batch_size)
+
+    avafodf = average_fodf_asymmetrically(fodf_data,
+                                          sh_order=args.sh_order,
+                                          sh_basis=args.sh_basis,
+                                          sphere_str=args.sphere,
+                                          dot_sharpness=args.sharpness,
+                                          sigma=args.sigma,
+                                          mask=mask_data)
     nib.save(nib.Nifti1Image(avafodf.astype(np.float), fodf_img.affine),
              args.out_avafodf)
     t1 = time.perf_counter()
