@@ -15,7 +15,7 @@ import numpy as np
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_sh_basis_args)
 
-from scilpy.denoise.asym_enhancement import (average_fodf_asymmetrically)
+from scilpy.denoise.asym_enhancement_eso_2 import (average_fodf_asymmetrically)
 
 
 def _build_arg_parser():

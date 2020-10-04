@@ -7,9 +7,8 @@ from scipy.ndimage import correlate
 
 
 def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
-                                sphere_str='repulsion724', in_full_basis=False,
-                                out_full_basis=True, dot_sharpness=1.0,
-                                sigma=1.0, mask=None, batch_size=10):
+                                sphere_str='repulsion724', dot_sharpness=1.0,
+                                sigma=1.0, mask=None):
     """Average the fODF projected on a sphere using a first-neighbor gaussian
     blur and a dot product weight between sphere directions and the direction
     to neighborhood voxels, forcing to 0 negative values and thus performing
@@ -55,7 +54,7 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
 
     # Convert to spherical function
     in_sh_basis = sh_basis
-    if in_full_basis:
+    if fodf.shape[-1] == (sh_order + 1)**2:
         in_sh_basis += '_full'
     B = sh_to_sf_matrix(sphere, sh_order=sh_order, basis_type=in_sh_basis,
                         return_inv=False)
@@ -72,9 +71,7 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
         mean_sf[..., sf_i] = correlate(current_sf, w_filter, mode="constant", cval=0)
 
     # Convert back to SH coefficients
-    out_sh_basis = sh_basis
-    if out_full_basis:
-        out_sh_basis += '_full'
+    out_sh_basis = sh_basis + '_full'
     _, B_inv = sh_to_sf_matrix(sphere, sh_order=sh_order,
                                basis_type=out_sh_basis)
     if mask is not None:
