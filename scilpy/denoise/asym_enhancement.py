@@ -42,9 +42,9 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     """
     # Load the sphere used for projection of SH
     sphere = get_sphere(sphere_str)
+
     # Normalized filter for each sf direction
-    weigths = _get_weights(sphere, dot_sharpness, sigma)
-    c_w_per_sf, n_w_per_sf = weigths
+    weights = _get_weights(sphere, dot_sharpness, sigma)
 
     # Detect if the basis is full based on its order
     # and the number of coefficients of the SH
@@ -64,14 +64,14 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
                             basis_type=in_sh_basis, return_inv=False)
 
     for sf_i in range(nb_sf):
-        # first pass: filtering opposite hemispheres
-        current_sf = np.dot(fodf, neg_B[:, sf_i])
-        w_filter = n_w_per_sf[sf_i]
-        mean_sf[..., sf_i] = correlate(current_sf, w_filter, mode="constant")
-
-        # second pass: apply weight of center sf
+        # Calculate contribution of center voxel
         current_sf = np.dot(fodf, B[:, sf_i])
-        w_filter = c_w_per_sf[sf_i]
+        w_filter = weights[..., sf_i]
+        mean_sf[..., sf_i] = w_filter[1, 1, 1] * current_sf
+
+        # Add contributions of neighbors using opposite hemispheres
+        current_sf = np.dot(fodf, neg_B[:, sf_i])
+        w_filter[1, 1, 1] = 0.0
         mean_sf[..., sf_i] += correlate(current_sf, w_filter, mode="constant")
 
     # Convert back to SH coefficients
@@ -110,31 +110,29 @@ def _get_weights(sphere, dot_sharpness, sigma):
     norm: array
         per vertex norm of weights
     """
-    directions = np.transpose(np.indices((3, 3, 3)) - np.ones((3, 3, 3)))
-    directions = np.reshape(directions, (27, 3))
-    non_zero_dir = np.ones([27], dtype=bool)
-    non_zero_dir[13] = False
+    directions = np.zeros((3, 3, 3, 3))
+    for x in range(3):
+        for y in range(3):
+            for z in range(3):
+                directions[x, y, z, 0] = x - 1
+                directions[x, y, z, 1] = y - 1
+                directions[x, y, z, 2] = z - 1
+
+    non_zero_dir = np.ones((3, 3, 3), dtype=bool)
+    non_zero_dir[1, 1, 1] = False
 
     # normalize dir
     dir_norm = np.linalg.norm(directions, axis=-1, keepdims=True)
     directions[non_zero_dir] /= dir_norm[non_zero_dir]
 
     g_weights = np.exp(-dir_norm**2 / (2 * sigma**2))
-    d_weights = np.dot(sphere.vertices, directions.T)
+    d_weights = np.dot(directions, sphere.vertices.T)
+
     d_weights = np.where(d_weights > 0.0, d_weights**dot_sharpness, 0.0)
-    weights = d_weights * g_weights.T
-    weights[:, 13] = 1.0
-    # normalize filter right here
-    weights /= weights.sum(axis=-1, keepdims=True)
+    weights = d_weights * g_weights
+    weights[1, 1, 1, :] = 1.0
 
-    # Filter for center voxel
-    c_weights = np.zeros_like(weights)
-    c_weights[:, 13] = weights[:, 13]
-    c_weights = c_weights.reshape((len(sphere.vertices), 3, 3, 3))
+    # Normalize filters so that all sphere directions weights sum to 1
+    weights /= weights.reshape((-1, weights.shape[-1])).sum(axis=0)
 
-    # Filter for neighbors
-    n_weights = np.copy(weights)
-    n_weights[:, 13] = 0.0
-    n_weights = n_weights.reshape((len(sphere.vertices), 3, 3, 3))
-
-    return c_weights, n_weights
+    return weights
