@@ -3,13 +3,69 @@
 import numpy as np
 from dipy.reconst.shm import sh_to_sf_matrix
 from dipy.data import get_sphere
-from dipy.core.sphere import Sphere
+from dipy.core.sphere import Sphere, HemiSphere
 from scipy.ndimage import correlate
+
+import nibabel as nib
+
+
+def _get_hemisphere_repulsion(n_pts, nb_iter=5000):
+    theta = np.pi * np.random.rand(n_pts)
+    phi = 2 * np.pi * np.random.rand(n_pts)
+    hsph_initial = HemiSphere(theta=theta, phi=phi)
+    hsph_updated, potential = disperse_charges(hsph_initial, nb_iter)
+
+    return hsph_updated
+
+
+def infer_asymmetries_from_neighbors(fodf):
+    sphere = get_sphere('repulsion724')
+    sphere_mirror = Sphere(xyz=-sphere.vertices)
+
+    # fODF tendencies from neighborhood information
+    global_fodf = average_fodf_asymmetrically(fodf, exclude_center=True)
+    nib.save(nib.Nifti1Image(global_fodf.astype(np.float), np.identity(4)),
+             'asym_fodf.nii.gz')
+
+    B = sh_to_sf_matrix(sphere, sh_order=8, return_inv=False)
+    B_mirror = sh_to_sf_matrix(sphere_mirror, sh_order=8, return_inv=False)
+
+    B_full = sh_to_sf_matrix(sphere, basis_type='descoteaux07_full',
+                             sh_order=8, return_inv=False)
+    B_full_mirror = sh_to_sf_matrix(sphere_mirror,
+                                    basis_type='descoteaux07_full',
+                                    sh_order=8, return_inv=False)
+    nb_sf = len(sphere.vertices)
+    out_sf = np.zeros(np.append(fodf.shape[:-1], [nb_sf]))
+
+    for sf_i in range(nb_sf):
+        v = np.dot(fodf, B[..., sf_i])
+        v_minus = np.dot(fodf, B_mirror[..., sf_i])
+        v[v < 0] = 0
+        v_minus[v_minus < 0] = 0
+        sym_energy = v + v_minus
+
+        v = np.dot(global_fodf, B_full[..., sf_i])
+        v_minus = np.dot(global_fodf, B_full_mirror[..., sf_i])
+        v[v < 0] = 0
+        v_minus[v_minus < 0] = 0
+        asym_energy = v + v_minus
+
+        non_zero_sf = asym_energy > 0
+        ratios = np.zeros_like(asym_energy)
+        ratios[non_zero_sf] = v[non_zero_sf] / asym_energy[non_zero_sf]
+        out_sf[..., sf_i] = sym_energy * ratios
+
+    _, B_inv = sh_to_sf_matrix(sphere, sh_order=8,
+                               basis_type='descoteaux07_full')
+
+    asym_fodf = np.array([np.dot(i, B_inv) for i in out_sf])
+    return asym_fodf
 
 
 def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
                                 sphere_str='repulsion724', dot_sharpness=1.0,
-                                sigma=1.0, mask=None):
+                                sigma=1.0, mask=None, exclude_center=False):
     """Average the fODF projected on a sphere using a first-neighbor gaussian
     blur and a dot product weight between sphere directions and the direction
     to neighborhood voxels, forcing to 0 negative values and thus performing
@@ -44,7 +100,7 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     sphere = get_sphere(sphere_str)
 
     # Normalized filter for each sf direction
-    weights = _get_weights(sphere, dot_sharpness, sigma)
+    weights = _get_weights(sphere, dot_sharpness, sigma, exclude_center)
 
     # Detect if the basis is full based on its order
     # and the number of coefficients of the SH
@@ -91,7 +147,7 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     return avafodf
 
 
-def _get_weights(sphere, dot_sharpness, sigma):
+def _get_weights(sphere, dot_sharpness, sigma, exclude_center=False):
     """
     Get neighbors weight in respect to the direction to a voxel
 
@@ -131,7 +187,7 @@ def _get_weights(sphere, dot_sharpness, sigma):
 
     d_weights = np.where(d_weights > 0.0, d_weights**dot_sharpness, 0.0)
     weights = d_weights * g_weights
-    weights[1, 1, 1, :] = 1.0
+    weights[1, 1, 1, :] = 0.0 if exclude_center else 1.0
 
     # Normalize filters so that all sphere directions weights sum to 1
     weights /= weights.reshape((-1, weights.shape[-1])).sum(axis=0)
