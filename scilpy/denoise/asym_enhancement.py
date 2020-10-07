@@ -30,7 +30,7 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
         Exponent of the dot product. When set to 0.0, directions
         are not weighted by the dot product. Default: 1.0
     sigma: float, optional
-        Variance of the gaussian. Default: 1.0
+        Sigma for the gaussian. Default: 1.0
     mask: ndarray, optional
         If supplied, forces to 0 fODF in voxels outside mask. Default: None
 
@@ -64,9 +64,10 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
                             basis_type=in_sh_basis, return_inv=False)
 
     for sf_i in range(nb_sf):
+        w_filter = weights[..., sf_i]
+
         # Calculate contribution of center voxel
         current_sf = np.dot(fodf, B[:, sf_i])
-        w_filter = weights[..., sf_i]
         mean_sf[..., sf_i] = w_filter[1, 1, 1] * current_sf
 
         # Add contributions of neighbors using opposite hemispheres

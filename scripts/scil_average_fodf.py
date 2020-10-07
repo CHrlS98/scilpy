@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -27,6 +27,9 @@ def _build_arg_parser():
 
     p.add_argument('out_avafodf',
                    help='Output path of averaged fODF')
+
+    p.add_argument('--nb_iterations', default=1, type=int,
+                   help='Number of iterations.')
 
     p.add_argument('--mask',
                    help='Path to a mask to apply on output')
@@ -57,6 +60,48 @@ def _build_arg_parser():
     return p
 
 
+def get_file_prefix_and_extension(avafodf_file):
+    extension_index = avafodf_file.find('.nii')
+    if extension_index != -1:
+        extension = avafodf_file[extension_index:]
+        prefix = avafodf_file[:extension_index]
+    else:
+        extension = '.nii.gz'
+        prefix = avafodf_file
+    return prefix, extension
+
+
+def filter_iterative(fodf, mask, affine, args):
+    f_prefix, f_extension = get_file_prefix_and_extension(args.out_avafodf)
+    for i in range(args.nb_iterations):
+        avafodf = average_fodf_asymmetrically(fodf,
+                                              sh_order=args.sh_order,
+                                              sh_basis=args.sh_basis,
+                                              sphere_str=args.sphere,
+                                              dot_sharpness=args.sharpness,
+                                              sigma=args.sigma,
+                                              mask=mask)
+        outfile = f_prefix + '_{0}'.format(i) + f_extension
+        nib.save(nib.Nifti1Image(avafodf.astype(np.float), affine),
+                 outfile)
+        fodf = avafodf
+
+
+def filter_one_shot(fodf, mask, affine, args):
+    f_prefix, f_extension = get_file_prefix_and_extension(args.out_avafodf)
+    avafodf = average_fodf_asymmetrically(fodf,
+                                          sh_order=args.sh_order,
+                                          sh_basis=args.sh_basis,
+                                          sphere_str=args.sphere,
+                                          dot_sharpness=args.sharpness,
+                                          sigma=args.sigma,
+                                          mask=mask)
+
+    outfile = f_prefix + f_extension
+    nib.save(nib.Nifti1Image(avafodf.astype(np.float), affine),
+             outfile)
+
+
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -83,16 +128,10 @@ def main():
     # Computing neighbors asymmetric average of fODFs
     t0 = time.perf_counter()
     logging.info('Computing asymmetric averaged fODF')
-
-    avafodf = average_fodf_asymmetrically(fodf_data,
-                                          sh_order=args.sh_order,
-                                          sh_basis=args.sh_basis,
-                                          sphere_str=args.sphere,
-                                          dot_sharpness=args.sharpness,
-                                          sigma=args.sigma,
-                                          mask=mask_data)
-    nib.save(nib.Nifti1Image(avafodf.astype(np.float), fodf_img.affine),
-             args.out_avafodf)
+    if args.nb_iterations > 1:
+        filter_iterative(fodf_data, mask_data, fodf_img.affine, args)
+    else:
+        filter_one_shot(fodf_data, mask_data, fodf_img.affine, args)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0
