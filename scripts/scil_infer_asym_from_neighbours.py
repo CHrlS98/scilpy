@@ -56,6 +56,7 @@ def filter_iterative(fodf_data, args, affine):
         outfile = f_prefix + '_{0}'.format(i) + f_extension
         nib.save(nib.Nifti1Image(out_fodf.astype(np.float), affine),
                  outfile)
+        data = out_fodf
 
 
 def filter_one_shot(fodf_data, args, affine):

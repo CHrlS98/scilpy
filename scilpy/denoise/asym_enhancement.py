@@ -18,21 +18,30 @@ def _get_hemisphere_repulsion(n_pts, nb_iter=5000):
     return hsph_updated
 
 
-def infer_asymmetries_from_neighbors(fodf):
-    sphere = get_sphere('repulsion724')
+def infer_asymmetries_from_neighbors(fodf, sh_basis='descoteaux07',
+                                     sh_order=8, sphere_name='repulsion724'):
+    sphere = get_sphere(sphere_name)
     sphere_mirror = Sphere(xyz=-sphere.vertices)
 
     # fODF tendencies from neighborhood information
     global_fodf = average_fodf_asymmetrically(fodf, exclude_center=True)
 
-    B = sh_to_sf_matrix(sphere, sh_order=8, return_inv=False)
-    B_mirror = sh_to_sf_matrix(sphere_mirror, sh_order=8, return_inv=False)
-
-    B_full = sh_to_sf_matrix(sphere, basis_type='descoteaux07_full',
+    B_full = sh_to_sf_matrix(sphere, basis_type=sh_basis + '_full',
                              sh_order=8, return_inv=False)
     B_full_mirror = sh_to_sf_matrix(sphere_mirror,
-                                    basis_type='descoteaux07_full',
+                                    basis_type=sh_basis + '_full',
                                     sh_order=8, return_inv=False)
+
+    if fodf.shape[-1] == (sh_order + 1)**2:
+        sh_basis += '_full'
+        B = B_full
+        B_mirror = B_full_mirror
+    else:
+        B = sh_to_sf_matrix(sphere, basis_type=sh_basis,
+                            sh_order=8,  return_inv=False)
+        B_mirror = sh_to_sf_matrix(sphere_mirror, basis_type=sh_basis,
+                                sh_order=8, return_inv=False)
+
     nb_sf = len(sphere.vertices)
     out_sf = np.zeros(np.append(fodf.shape[:-1], [nb_sf]))
 
