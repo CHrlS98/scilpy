@@ -24,8 +24,6 @@ def infer_asymmetries_from_neighbors(fodf):
 
     # fODF tendencies from neighborhood information
     global_fodf = average_fodf_asymmetrically(fodf, exclude_center=True)
-    nib.save(nib.Nifti1Image(global_fodf.astype(np.float), np.identity(4)),
-             'asym_fodf.nii.gz')
 
     B = sh_to_sf_matrix(sphere, sh_order=8, return_inv=False)
     B_mirror = sh_to_sf_matrix(sphere_mirror, sh_order=8, return_inv=False)

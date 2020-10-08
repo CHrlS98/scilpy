@@ -23,10 +23,13 @@ def _build_arg_parser():
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
 
     p.add_argument('in_fodf',
-                   help='Path to the input file')
+                   help='Path to the input file.')
 
     p.add_argument('out_avafodf',
-                   help='Output path of averaged fODF')
+                   help='Output path of averaged fODF.')
+
+    p.add_argument('--nb_it', type=int, default=1,
+                   help='Number of iterations.' )
 
     add_overwrite_arg(p)
 
@@ -42,6 +45,26 @@ def get_file_prefix_and_extension(avafodf_file):
         extension = '.nii.gz'
         prefix = avafodf_file
     return prefix, extension
+
+
+def filter_iterative(fodf_data, args, affine):
+    f_prefix, f_extension = get_file_prefix_and_extension(args.out_avafodf)
+    data = fodf_data
+    for i in range(args.nb_it):
+        logging.info('Iteration {0}'.format(i))
+        out_fodf = infer_asymmetries_from_neighbors(data)
+        outfile = f_prefix + '_{0}'.format(i) + f_extension
+        nib.save(nib.Nifti1Image(out_fodf.astype(np.float), affine),
+                 outfile)
+
+
+def filter_one_shot(fodf_data, args, affine):
+    f_prefix, f_extension = get_file_prefix_and_extension(args.out_avafodf)
+    asym_fodf = infer_asymmetries_from_neighbors(fodf_data)
+
+    outfile = f_prefix + f_extension
+    nib.save(nib.Nifti1Image(asym_fodf.astype(np.float), affine),
+             outfile)
 
 
 def main():
@@ -64,12 +87,10 @@ def main():
     # Computing neighbors asymmetric average of fODFs
     t0 = time.perf_counter()
     logging.info('Computing asymmetric fODF')
-    f_prefix, f_extension = get_file_prefix_and_extension(args.out_avafodf)
-    asym_fodf = infer_asymmetries_from_neighbors(fodf_data)
-
-    outfile = f_prefix + f_extension
-    nib.save(nib.Nifti1Image(asym_fodf.astype(np.float), fodf_img.affine),
-             outfile)
+    if args.nb_it > 1:
+        filter_iterative(fodf_data, args, fodf_img.affine)
+    else:
+        filter_one_shot(fodf_data, args, fodf_img.affine)
     t1 = time.perf_counter()
 
     elapsedTime = t1 - t0
