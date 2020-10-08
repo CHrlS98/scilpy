@@ -200,3 +200,33 @@ def _get_weights(sphere, dot_sharpness, sigma, exclude_center=False):
     weights /= weights.reshape((-1, weights.shape[-1])).sum(axis=0)
 
     return weights
+
+
+def compute_odd_power_map(fodf, sh_order):
+    """
+    Measure the asymmetry of the FODF per voxel.
+
+    Returns
+    =======
+    asym_measure: numpy array
+        array containing the asymmetry measure of each voxel
+    Note
+    ====
+    The asymmetry measure corresponds to the ratio of the norm of odd
+    order SH coefficients on the norm of full order SH order coefficients
+    """
+    if fodf.shape[-1] != (sh_order + 1)**2:
+        raise ValueError('FODF shape does not agree with given SH order'
+                         ' for a full SH basis.')
+
+    _, l_list = sph_harm_full_ind_list(sh_order)
+    odd_order_coeffs = fodf[..., l_list % 2 == 1]
+    odd_order_norms = np.linalg.norm(odd_order_coeffs, axis=-1)
+    full_norms = np.linalg.norm(fodf, axis=-1)
+
+    odd_pwr_map = np.zeros_like(full_norms)
+    mask = full_norms > 0
+
+    odd_pwr_map[mask] = odd_order_norms[mask] / full_norms[mask]
+
+    return odd_pwr_map
