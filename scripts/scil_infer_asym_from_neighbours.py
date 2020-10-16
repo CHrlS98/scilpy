@@ -29,7 +29,7 @@ def _build_arg_parser():
                    help='Output path of averaged fODF.')
 
     p.add_argument('--nb_it', type=int, default=1,
-                   help='Number of iterations.' )
+                   help='Number of iterations.')
 
     add_overwrite_arg(p)
 
