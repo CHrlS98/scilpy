@@ -9,7 +9,7 @@ from scipy.ndimage import correlate
 
 def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
                                 sphere_str='repulsion724', dot_sharpness=1.0,
-                                sigma=1.0, mask=None):
+                                sigma=1.0):
     """Average the fODF projected on a sphere using a first-neighbor gaussian
     blur and a dot product weight between sphere directions and the direction
     to neighborhood voxels, forcing to 0 negative values and thus performing
@@ -31,8 +31,6 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
         are not weighted by the dot product. Default: 1.0
     sigma: float, optional
         Sigma for the gaussian. Default: 1.0
-    mask: ndarray, optional
-        If supplied, forces to 0 fODF in voxels outside mask. Default: None
 
     Returns
     -------
@@ -79,15 +77,8 @@ def average_fodf_asymmetrically(fodf,  sh_order=8, sh_basis='descoteaux07',
     out_sh_basis = sh_basis + '_full'
     _, B_inv = sh_to_sf_matrix(sphere, sh_order=sh_order,
                                basis_type=out_sh_basis)
-    if mask is not None:
-        avafodf = np.zeros(
-            np.append(fodf.shape[:-1], [B_inv.shape[-1]]),
-            dtype='float32')
-        avafodf[mask] = np.array(
-            [np.dot(i, B_inv) for i in mean_sf])[mask]
-    else:
-        avafodf = np.array([np.dot(i, B_inv) for i in mean_sf])
 
+    avafodf = np.array([np.dot(i, B_inv) for i in mean_sf])
     return avafodf
 
 
