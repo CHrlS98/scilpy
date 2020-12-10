@@ -108,22 +108,10 @@ def get_peaks_and_nupeaks(args, mask):
     return peaks, nupeaks
 
 
-def get_neighbours_peaks(peaks, curr_pos, curr_dir):
-    padded_peaks =\
-        np.pad(peaks, ((1, 1), (1, 1), (1, 1), (0, 0), (0, 0)), mode='edge')
-    neighbors_vox = np.ceil(curr_pos - 1.).astype(int)\
-        + np.array(list(product((0, 1), repeat=3))) + 1
-    neighbors_vox = neighbors_vox.astype(int)
-    neighbors_peaks = peaks[neighbors_vox.T]
-
-    return neighbors_peaks
-
-
 def get_direction_nn(peaks, nupeaks, curr_pos, curr_dir, max_angle):
     """
     Nearest-neighbor asymmetric direction getter
     """
-    get_neighbours_peaks(peaks, curr_pos, curr_dir)
     curr_vox = (curr_pos + .5).astype(int)
     vox_peaks = peaks[tuple(curr_vox)][:nupeaks[tuple(curr_vox)]]
     if len(vox_peaks) == 0:
