@@ -7,7 +7,7 @@ from dipy.reconst.shm import sph_harm_lookup
 import numpy as np
 
 
-def find_order_from_nb_coeff(data):
+def find_order_from_nb_coeff(data, full_basis=False):
     if isinstance(data, np.ndarray):
         shape = data.shape
     else:
@@ -40,8 +40,9 @@ def get_b_matrix(order, sphere, sh_basis_type, return_all=False):
 
 
 def get_maximas(data, sphere, b_matrix, threshold, absolute_threshold,
-                min_separation_angle=25):
+                min_separation_angle=25, is_symmetric=True):
     spherical_func = np.dot(data, b_matrix.T)
     spherical_func[np.nonzero(spherical_func < absolute_threshold)] = 0.
     return peak_directions(
-        spherical_func, sphere, threshold, min_separation_angle)
+        spherical_func, sphere, threshold, min_separation_angle,
+        is_symmetric=is_symmetric)
