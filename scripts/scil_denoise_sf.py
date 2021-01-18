@@ -64,12 +64,6 @@ def _build_arg_parser():
     return p
 
 
-def generate_mask(sh, threshold):
-    norm = np.linalg.norm(sh, axis=-1)
-    mask = norm > threshold
-    return mask
-
-
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()

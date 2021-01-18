@@ -14,9 +14,6 @@ from scilpy.io.utils import (assert_inputs_exist,
                              add_overwrite_arg)
 from scilpy.io.image import get_data_as_mask
 
-EPS = 0.13587
-SH_CONST = 0.5 / np.sqrt(np.pi)
-
 
 def _build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__,

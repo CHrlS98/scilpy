@@ -22,10 +22,8 @@ from scipy.special import softmax
 def _build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawTextHelpFormatter)
-    p.add_argument('in_wm_fodf', help='Input WM fODF SH file.')
+
     p.add_argument('in_vf', help='Input volume fractions file.')
-    p.add_argument('in_fodf_th',
-                   help='Path to max fODF amplitude in ventricles text file.')
     p.add_argument('out_vf', help='Output normalized volume fractions map.')
 
     p.add_argument('--save_rgb', action='store_true',
@@ -39,7 +37,7 @@ def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    assert_inputs_exist(parser, [args.in_vf, args.in_wm_fodf, args.in_fodf_th])
+    assert_inputs_exist(parser, args.in_vf)
     assert_outputs_exist(parser, args, args.out_vf)
 
     vf_img = nib.load(args.in_vf)
