@@ -23,7 +23,8 @@ from dipy.data import SPHERE_FILES
 from scilpy.io.utils import (add_overwrite_arg,
                              assert_inputs_exist,
                              add_sh_basis_args,
-                             assert_output_dirs_exist_and_empty)
+                             assert_outputs_exist)
+from scilpy.io.image import get_data_as_mask
 
 from scilpy.denoise.asym_enhancement import local_asym_gaussian_filtering
 
@@ -38,15 +39,7 @@ def _build_arg_parser():
     p.add_argument('out_sh',
                    help='File name for averaged signal.')
 
-    p.add_argument('--out_dir', default='results',
-                   help='Output directory. Default is current directory.')
-
-    p.add_argument('--out_mask', default='mask.nii.gz',
-                   help='File name for output mask. [%(default)s]')
-
-    p.add_argument('--mask_eps', default=1e-16,
-                   help='Threshold on SH coefficients norm for output mask.'
-                   ' [%(default)s]')
+    p.add_argument('--in_mask', help='Optional input mask.')
 
     p.add_argument('--sh_order', default=8, type=int,
                    help='SH order of the input. [%(default)s]')
@@ -83,12 +76,19 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     # Checking args
-    assert_output_dirs_exist_and_empty(parser, args, args.out_dir)
-    assert_inputs_exist(parser, args.in_sh)
+    inputs = [args.in_sh]
+    if args.in_mask:
+        inputs.append(args.in_mask)
+    assert_inputs_exist(parser, inputs)
+    assert_outputs_exist(parser, args, args.out_sh)
 
     # Prepare data
     sh_img = nib.load(args.in_sh)
     data = sh_img.get_fdata(dtype=np.float)
+    if args.in_mask:
+        mask_img = nib.load(args.in_mask)
+        mask = get_data_as_mask(mask_img)
+        data *= mask[..., None]
 
     logging.info('Executing locally asymmetric Gaussian filtering.')
     filtered_sh = local_asym_gaussian_filtering(
@@ -99,13 +99,7 @@ def main():
         dot_sharpness=args.sharpness,
         sigma=args.sigma)
 
-    out_sh = os.path.join(args.out_dir, args.out_sh)
-    nib.save(nib.Nifti1Image(filtered_sh, sh_img.affine), out_sh)
-
-    # Generate mask by applying threshold on input SH amplitude
-    mask = generate_mask(data, args.mask_eps)
-    out_mask = os.path.join(args.out_dir, args.out_mask)
-    nib.save(nib.Nifti1Image(mask.astype(np.uint8), sh_img.affine), out_mask)
+    nib.save(nib.Nifti1Image(filtered_sh, sh_img.affine), args.out_sh)
 
 
 if __name__ == "__main__":
