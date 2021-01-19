@@ -21,7 +21,7 @@ def _build_arg_parser():
     p.add_argument('in_vf', help='Input volume fractions file.')
     p.add_argument('out_wm_mask', help='Output WM mask.')
 
-    p.add_argument('--th', type=float, default=2.3)
+    p.add_argument('--th', type=float, default=2.5)
 
     add_overwrite_arg(p)
     return p
