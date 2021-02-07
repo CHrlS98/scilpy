@@ -72,9 +72,9 @@ def set_display_extent(slicer_actor, orientation, volume_shape):
         raise ValueError('Invalid axis name : {0}'.format(orientation))
 
 
-def create_odf_slicer(sh_fodf, mask, sphere, nb_subdivide,
-                      sh_order, sh_basis, full_basis, orientation,
-                      scale, radial_scale, norm, colormap):
+def create_odf_slicer(sh_fodf, mask, sphere, nb_subdivide, sh_order, sh_basis,
+                      full_basis, orientation, scale, radial_scale,
+                      norm, colormap, variance=None, var_opacity=0.5):
     """
     Create a ODF slicer actor displaying a fODF slice. The input volume is a
     3-dimensional grid containing the SH coefficients of the fODF for each
@@ -86,21 +86,48 @@ def create_odf_slicer(sh_fodf, mask, sphere, nb_subdivide,
         sphere = sphere.subdivide(nb_subdivide)
 
     # Convert SH coefficients to SF coefficients
-    fodf = sh_to_sf(sh_fodf, sphere, sh_order, sh_basis,
-                    full_basis=full_basis)
-
+    fodf = sh_to_sf(sh_fodf, sphere, sh_order, sh_basis, full_basis=full_basis)
     # Get mask if supplied, otherwise create a mask discarding empty voxels
     if mask is None:
         mask = np.linalg.norm(fodf, axis=-1) > 0.
 
-    odf_actor = actor.odf_slicer(fodf, mask=mask, norm=norm,
-                                 radial_scale=radial_scale,
-                                 sphere=sphere,
-                                 colormap=colormap,
-                                 scale=scale)
-    set_display_extent(odf_actor, orientation, fodf.shape)
+    if variance is not None:
+        fodf_var = sh_to_sf(variance, sphere, sh_order, sh_basis,
+                            full_basis=full_basis)
+        # normalise fodf and variance
+        if norm:
+            maximums = np.abs(np.append(fodf, fodf_var, axis=-1))\
+                .max(axis=-1)
+            fodf[maximums > 0] /= maximums[maximums > 0][..., None]
+            fodf_var[maximums > 0] /= maximums[maximums > 0][..., None]
 
-    return odf_actor
+        odf_actor = actor.odf_slicer(fodf, mask=mask, norm=False,
+                                     radial_scale=radial_scale,
+                                     sphere=sphere, scale=scale,
+                                     colormap=colormap)
+        affine = np.eye(4)
+        var_actor = actor.odf_slicer(fodf_var, mask=mask, norm=False,
+                                     radial_scale=radial_scale,
+                                     sphere=sphere, opacity=var_opacity,
+                                     colormap=(255, 255, 255),
+                                     scale=scale, affine=affine)
+        var_actor.GetProperty().SetDiffuse(0.0)
+        var_actor.GetProperty().SetAmbient(1.0)
+        var_actor.GetProperty().SetAmbientColor(255, 255, 255)
+        var_actor.GetProperty().SetBackfaceCulling(True)
+    else:
+        odf_actor = actor.odf_slicer(fodf, mask=mask, norm=norm,
+                                     radial_scale=radial_scale,
+                                     sphere=sphere, colormap=colormap,
+                                     scale=scale)
+        var_actor = None
+
+    # set actors orientations and slicing
+    set_display_extent(odf_actor, orientation, fodf.shape)
+    if var_actor is not None:
+        set_display_extent(var_actor, orientation, fodf_var.shape)
+
+    return odf_actor, var_actor
 
 
 def _get_affine_for_texture(orientation, offset):

@@ -34,7 +34,7 @@ def _build_arg_parser():
 
     # Positional arguments
     p.add_argument('in_fodf', default=None, help='Input SH image file.')
-    p.add_argument('in_var', help='Input SH variance.')
+    p.add_argument('in_fodf_plus_var', help='Input SH variance.')
 
     # Variance display options
     p.add_argument('-k', default=2.0, type=float)
@@ -216,7 +216,7 @@ def _get_data_from_inputs(args):
     del fodf
     gc.collect()
 
-    var = nib.nifti1.load(args.in_var).get_fdata(dtype=np.float32)
+    var = nib.nifti1.load(args.in_fodf_plus_var).get_fdata(dtype=np.float32)
     if var.shape != shape:
         raise ValueError('Variance dimensions {0} do not agree '
                          'with fODF dimensions {1}'.format(var.shape, shape))
@@ -303,23 +303,15 @@ def main():
         mask = None
 
     # Instantiate the ODF slicer actor
-    odf_actor = create_odf_slicer(data['fodf'], mask, sph,
-                                  args.sph_subdivide, sh_order,
-                                  args.sh_basis, args.full_basis,
-                                  args.axis_name, args.scale,
-                                  not args.radial_scale_off,
-                                  False, args.colormap)
+    odf_actor, var_actor = create_odf_slicer(data['fodf'], mask, sph,
+                                             args.sph_subdivide, sh_order,
+                                             args.sh_basis, args.full_basis,
+                                             args.axis_name, args.scale,
+                                             not args.radial_scale_off,
+                                             not args.norm_off, args.colormap,
+                                             variance=data['var'],
+                                             var_opacity=1.0)
 
-    var_odf = data['fodf'] + args.k * data['var']
-    print(data['var'].max())
-    print(var_odf.max())
-    var_actor = create_odf_slicer(var_odf, mask, sph,
-                                  args.sph_subdivide, sh_order,
-                                  args.sh_basis, args.full_basis,
-                                  args.axis_name, args.scale,
-                                  not args.radial_scale_off,
-                                  False, 'blues',
-                                  opacity=0.5)
     actors.append(odf_actor)
     actors.append(var_actor)
 
