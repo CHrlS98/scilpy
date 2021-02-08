@@ -269,7 +269,7 @@ class OdfSlicerActor(vtk.vtkActor):
             return sf * self.scale
         # when odfs are in SF coefficients, the normalisation and scaling
         # are done during initialisation. We simply return them:
-        return self.odfs
+        return self.odfs[mask[self.indices]]
 
     def _get_all_vertices(self, offsets, sph_dirs, sf):
         """
