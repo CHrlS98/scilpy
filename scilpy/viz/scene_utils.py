@@ -113,7 +113,7 @@ def create_odf_slicer(sh_fodf, mask, sphere, nb_subdivide, sh_order, sh_basis,
                                colormap=variance_color)
         var_actor.GetProperty().SetDiffuse(0.0)
         var_actor.GetProperty().SetAmbient(1.0)
-        var_actor.GetProperty().SetBackfaceCulling(True)
+        var_actor.GetProperty().SetFrontfaceCulling(True)
     else:
         odf_actor = odf_slicer(fodf, mask=mask, norm=norm,
                                radial_scale=radial_scale,

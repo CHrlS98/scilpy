@@ -118,7 +118,7 @@ class OdfSlicerActor(vtk.vtkActor):
     def __init__(self, odfs, sphere, indices, scale, norm, radial_scale,
                  global_cm, colormap, opacity, affine=None, mask=None, B=None):
         self.vertices = sphere.vertices
-        self.faces = sphere.faces
+        self.faces = self._reorder_faces(sphere.faces)
         self.odfs = odfs
         self.indices = indices
         self.B = B
@@ -316,3 +316,18 @@ class OdfSlicerActor(vtk.vtkActor):
             all_colors =\
                 np.tile(np.abs(self.vertices)*255, (len(sf), 1))
         return all_colors.astype(np.uint8)
+
+    def _reorder_faces(self, faces):
+        """
+        Rearrange faces for vtk polydata normal generation.
+        """
+        reordered = faces
+        for i in range(len(faces)):
+            a, b, c = tuple(self.vertices[faces[i]])
+            ab = b - a
+            ac = c - a
+            n = a + b + c
+            n /= np.linalg.norm(n)
+            if np.cross(ab, ac).dot(n) < 0:
+                reordered[i] = [faces[i, 0], faces[i, 2], faces[i, 1]]
+        return reordered
