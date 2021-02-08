@@ -4,7 +4,7 @@ from enum import Enum
 import numpy as np
 
 from dipy.reconst.shm import sh_to_sf
-from fury import window, actor
+from fury import window, actor, io
 from scilpy.viz.odf_slicer import odf_slicer
 
 
@@ -219,4 +219,6 @@ def render_scene(scene, window_size, interactor, output, silent):
         showm.start()
 
     if output:
-        window.snapshot(scene, size=window_size, fname=output)
+        out = window.snapshot(scene, size=window_size)
+        # temporary fix to window.snapshot flipping images
+        io.save_image(out[::-1], filename=output)

@@ -137,8 +137,8 @@ def _build_arg_parser():
     # fODF variance options
     p.add_argument('--variance',
                    help='FODF variance (mean + k * variance) file.')
-    p.add_argument('--var_color', nargs=3, type=int,
-                   default=(255, 255, 255))
+    p.add_argument('--var_color', nargs=3, type=int, default=(255, 255, 255),
+                   help='Color of variance outline. [%(default)s]')
 
     return p
 
