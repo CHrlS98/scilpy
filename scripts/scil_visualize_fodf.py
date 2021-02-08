@@ -134,6 +134,12 @@ def _build_arg_parser():
                                    help='Length of the peaks segments. '
                                         '[%(default)s]')
 
+    # fODF variance options
+    p.add_argument('--variance',
+                   help='FODF variance (mean + k * variance) file.')
+    p.add_argument('--var_color', nargs=3, type=int,
+                   default=(255, 255, 255))
+
     return p
 
 
@@ -202,25 +208,25 @@ def _get_data_from_inputs(args):
     Load data given by args. Perform checks to ensure dimensions agree
     between the data for mask, background, peaks and fODF.
     """
-    fodf = nib.nifti1.load(args.in_fodf).get_fdata(dtype=np.float32)
+    fodf = nib.load(args.in_fodf).get_fdata(dtype=np.float32)
     data = {'fodf': _crop_along_axis(fodf, args.slice_index,
                                      args.axis_name)}
     if args.background:
-        bg = nib.nifti1.load(args.background).get_fdata(dtype=np.float32)
+        bg = nib.load(args.background).get_fdata(dtype=np.float32)
         if bg.shape[:3] != fodf.shape[:-1]:
             raise ValueError('Background dimensions {0} do not agree with fODF'
                              ' dimensions {1}.'.format(bg.shape, fodf.shape))
         data['bg'] = _crop_along_axis(bg, args.slice_index,
                                       args.axis_name)
     if args.mask:
-        mask = get_data_as_mask(nib.nifti1.load(args.mask), dtype=bool)
+        mask = get_data_as_mask(nib.load(args.mask), dtype=bool)
         if mask.shape != fodf.shape[:-1]:
             raise ValueError('Mask dimensions {0} do not agree with fODF '
                              'dimensions {1}.'.format(mask.shape, fodf.shape))
         data['mask'] = _crop_along_axis(mask, args.slice_index,
                                         args.axis_name)
     if args.peaks:
-        peaks = nib.nifti1.load(args.peaks).get_fdata(dtype=np.float32)
+        peaks = nib.load(args.peaks).get_fdata(dtype=np.float32)
         if peaks.shape[:3] != fodf.shape[:-1]:
             raise ValueError('Peaks volume dimensions {0} do not agree '
                              'with fODF dimensions {1}.'.format(bg.shape,
@@ -238,7 +244,7 @@ def _get_data_from_inputs(args):
                                          args.axis_name)
         if args.peaks_values:
             peak_vals =\
-                nib.nifti1.load(args.peaks_values).get_fdata(dtype=np.float32)
+                nib.load(args.peaks_values).get_fdata(dtype=np.float32)
             if peak_vals.shape[:3] != fodf.shape[:-1]:
                 raise ValueError('Peaks volume dimensions {0} do not agree '
                                  'with fODF dimensions {1}.'
@@ -246,6 +252,14 @@ def _get_data_from_inputs(args):
             data['peaks_values'] =\
                 _crop_along_axis(peak_vals, args.slice_index,
                                  args.axis_name)
+    if args.variance:
+        variance = nib.load(args.variance).get_fdata(dtype=np.float32)
+        if variance.shape != fodf.shape:
+            raise ValueError('Dimensions mismatch between fODF {0} and '
+                             'variance {1}.'
+                             .format(fodf.shape, variance.shape))
+        data['variance'] = _crop_along_axis(variance, args.slice_index,
+                                            args.axis_name)
 
     grid_shape = data['fodf'].shape[:3]
     return data, grid_shape
@@ -282,14 +296,21 @@ def main():
     else:
         mask = None
 
+    variance = data['variance'] if args.variance else None
     # Instantiate the ODF slicer actor
-    odf_actor = create_odf_slicer(data['fodf'], mask, sph,
-                                  args.sph_subdivide, sh_order,
-                                  args.sh_basis, args.full_basis,
-                                  args.axis_name, args.scale,
-                                  not args.radial_scale_off,
-                                  not args.norm_off, args.colormap)
+    odf_actor, var_actor =\
+        create_odf_slicer(data['fodf'], mask, sph,
+                          args.sph_subdivide, sh_order,
+                          args.sh_basis, args.full_basis,
+                          args.axis_name, args.scale,
+                          not args.radial_scale_off,
+                          not args.norm_off, args.colormap,
+                          variance=variance,
+                          variance_color=args.var_color)
+
     actors.append(odf_actor)
+    if var_actor is not None:
+        actors.append(var_actor)
 
     # Instantiate a texture slicer actor if a background image is supplied
     if 'bg' in data:

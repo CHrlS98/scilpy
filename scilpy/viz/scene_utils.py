@@ -5,6 +5,7 @@ import numpy as np
 
 from dipy.reconst.shm import sh_to_sf
 from fury import window, actor
+from scilpy.viz.odf_slicer import odf_slicer
 
 
 class CamParams(Enum):
@@ -73,8 +74,8 @@ def set_display_extent(slicer_actor, orientation, volume_shape):
 
 
 def create_odf_slicer(sh_fodf, mask, sphere, nb_subdivide, sh_order, sh_basis,
-                      full_basis, orientation, scale, radial_scale,
-                      norm, colormap, variance=None, var_opacity=0.5):
+                      full_basis, orientation, scale, radial_scale, norm,
+                      colormap, variance=None, variance_color=(255, 255, 255)):
     """
     Create a ODF slicer actor displaying a fODF slice. The input volume is a
     3-dimensional grid containing the SH coefficients of the fODF for each
@@ -101,25 +102,23 @@ def create_odf_slicer(sh_fodf, mask, sphere, nb_subdivide, sh_order, sh_basis,
             fodf[maximums > 0] /= maximums[maximums > 0][..., None]
             fodf_var[maximums > 0] /= maximums[maximums > 0][..., None]
 
-        odf_actor = actor.odf_slicer(fodf, mask=mask, norm=False,
-                                     radial_scale=radial_scale,
-                                     sphere=sphere, scale=scale,
-                                     colormap=colormap)
-        affine = np.eye(4)
-        var_actor = actor.odf_slicer(fodf_var, mask=mask, norm=False,
-                                     radial_scale=radial_scale,
-                                     sphere=sphere, opacity=var_opacity,
-                                     colormap=(255, 255, 255),
-                                     scale=scale, affine=affine)
+        odf_actor = odf_slicer(fodf, mask=mask, norm=False,
+                               radial_scale=radial_scale,
+                               sphere=sphere, scale=scale,
+                               colormap=colormap)
+
+        var_actor = odf_slicer(fodf_var, mask=mask, norm=False,
+                               radial_scale=radial_scale,
+                               sphere=sphere, scale=scale,
+                               colormap=variance_color)
         var_actor.GetProperty().SetDiffuse(0.0)
         var_actor.GetProperty().SetAmbient(1.0)
-        var_actor.GetProperty().SetAmbientColor(255, 255, 255)
         var_actor.GetProperty().SetBackfaceCulling(True)
     else:
-        odf_actor = actor.odf_slicer(fodf, mask=mask, norm=norm,
-                                     radial_scale=radial_scale,
-                                     sphere=sphere, colormap=colormap,
-                                     scale=scale)
+        odf_actor = odf_slicer(fodf, mask=mask, norm=norm,
+                               radial_scale=radial_scale,
+                               sphere=sphere, colormap=colormap,
+                               scale=scale)
         var_actor = None
 
     # set actors orientations and slicing
