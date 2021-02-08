@@ -219,6 +219,4 @@ def render_scene(scene, window_size, interactor, output, silent):
         showm.start()
 
     if output:
-        out = window.snapshot(scene, size=window_size)
-        # temporary fix to window.snapshot flipping images
-        io.save_image(out[::-1], filename=output)
+        window.snapshot(scene, size=window_size, fname=output)
