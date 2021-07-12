@@ -9,14 +9,9 @@ import argparse
 import nibabel as nib
 import numpy as np
 
-from dipy.data import get_sphere
-from dipy.reconst.shm import sh_to_sf
-from fury import window, actor, colormap
+from fury import actor
 
-from scilpy.io.utils import (add_sh_basis_args)
-from scilpy.viz.screenshot import (prepare_texture_slicer_actor,
-                                   crop_data_along_axis,
-                                   display_scene, create_colormap)
+from scilpy.viz.scene_utils import create_scene, render_scene
 
 WINDOW_SIZE = (768, 768)
 
@@ -28,7 +23,7 @@ def _build_arg_parser():
     p.add_argument('input',
                    help='Input peaks image file.')
 
-    p.add_argument('slice_index', type=int,
+    p.add_argument('--slice_index', type=int,
                    help='The index of the slice to visualize in axis_name')
 
     p.add_argument('--peaks_values', help='Values of peaks')
@@ -45,9 +40,6 @@ def _build_arg_parser():
     p.add_argument('--line_width', type=float, default=1.0,
                    help='Set line width')
 
-    p.add_argument('--bg',
-                   help='Optional background image file')
-
     p.add_argument('--mask',
                    help='Path to mask')
 
@@ -61,15 +53,11 @@ def _build_arg_parser():
                    choices={'axial', 'coronal', 'sagittal'},
                    help='Name of the axis to visualize.')
 
-    p.add_argument('--interactor', default='image',
+    p.add_argument('--interactor', default='trackball',
                    choices={'image', 'trackball'},
                    help='Specify interactor mode for vtk window')
 
-    p.add_argument('--distinguishable', default=False, action='store_true',
-                   help='Use distinguishable color for each integer \
-                         value in texture')
-
-    p.add_argument('--color', default=[1.0, 0.0, 0.0], nargs=3, type=float,
+    p.add_argument('--color', default=None, nargs=3, type=float,
                    help='Color ')
 
     return p
@@ -77,7 +65,7 @@ def _build_arg_parser():
 
 def prepare_peaks_slicer_actor(data, index, values, orientation,
                                mask, line_width, colors):
-    peaks_slicer = actor.peak_slicer(data, values, symm=False, mask=mask,
+    peaks_slicer = actor.peak_slicer(data, values, mask=mask,
                                      colors=colors,
                                      linewidth=line_width)
     if orientation == 'sagittal':
@@ -126,37 +114,27 @@ def main():
     mask = get_mask(peaks_data, args)
     peaks_val = get_peaks_vals(peaks_data, args)
 
+    if args.slice_index is None:
+        if args.axis_name == 'sagittal':
+            slice_index = peaks_data.shape[0] // 2
+        if args.axis_name == 'coronal':
+            slice_index = peaks_data.shape[1] // 2
+        if args.axis_name == 'axial':
+            slice_index = peaks_data.shape[2] // 2
+    else:
+        slice_index = args.slice_index
+
     peaks_actor =\
-        prepare_peaks_slicer_actor(peaks_data, args.slice_index, peaks_val,
+        prepare_peaks_slicer_actor(peaks_data, slice_index, peaks_val,
                                    args.axis_name, mask, args.line_width,
                                    args.color)
-    # actors.append(peaks_actor)
 
-    if args.bg:
-        bg_data = nib.nifti1.load(args.bg).get_fdata()
-        bg_data[mask == 0] = 0
+    actors.append(peaks_actor)
 
-        if args.distinguishable:
-            colormap_lut = create_colormap(int(bg_data.max() + 1))
-        else:
-            colormap_lut = None
-
-        bg_actor =\
-            prepare_texture_slicer_actor(bg_data, args.min_value,
-                                         args.max_value, args.axis_name,
-                                         colormap_lut=colormap_lut,
-                                         slice_index=args.slice_index)
-        actors.append(bg_actor)
-
-    display_scene(actors,
-                  peaks_data.shape,
-                  WINDOW_SIZE,
-                  args.axis_name,
-                  args.interactor,
-                  args.output,
-                  'Visualize peaks',
-                  silent=args.silent,
-                  slice_index=args.slice_index)
+    scene = create_scene(actors, args.axis_name,
+                         slice_index,
+                         peaks_data.shape[:3])
+    render_scene(scene, WINDOW_SIZE, args.interactor, args.output, args.silent)
 
 
 if __name__ == '__main__':
