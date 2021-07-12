@@ -3,6 +3,8 @@
 from fury import window, actor, colormap, io
 import numpy as np
 
+from scilpy.io.utils import snapshot
+
 
 def display_slices(volume_actor, slices,
                    output_filename, axis_name,
@@ -26,153 +28,14 @@ def display_slices(volume_actor, slices,
         view_up_vector = (0, 1, 0)
 
     # Generate the scene, set the camera and take the snapshot
-    ren = window.Renderer()
-    ren.add(volume_actor)
-    if streamlines_actor:
-        ren.add(streamlines_actor)
-    elif peaks_actor:
-        ren.add(peaks_actor)
-    ren.set_camera(position=view_position,
-                   view_up=view_up_vector,
-                   focal_point=focal_point)
-
-    window.snapshot(ren, size=(1920, 1080), offscreen=True,
-                    fname=output_filename)
-
-
-def prepare_scene(axis_name, shape, slice_index):
-    """
-    Prepare scene and camera for visualizing slice in axis_name orientation
-    """
-    if axis_name == 'sagittal':
-        view_position = [-280.0,
-                         (shape[1] - 1) / 2.0,
-                         (shape[2] - 1) / 2.0]
-        view_center = [slice_index,
-                       (shape[1] - 1) / 2.0,
-                       (shape[2] - 1) / 2.0]
-        view_up = [0.0, 0.0, 1.0]
-        zoom_factor = 2.0 / shape[1] if shape[1] > shape[2] else 2.0 / shape[2]
-    elif axis_name == 'coronal':
-        view_position = [(shape[0] - 1) / 2.0,
-                         280.0,
-                         (shape[2] - 1) / 2.0]
-        view_center = [(shape[0] - 1) / 2.0,
-                       slice_index,
-                       (shape[2] - 1) / 2.0]
-        view_up = [0.0, 0.0, 1.0]
-        zoom_factor = 2.0 / shape[0] if shape[0] > shape[2] else 2.0 / shape[2]
-    elif axis_name == 'axial':
-        view_position = [(shape[0] - 1) / 2.0,
-                         (shape[1] - 1) / 2.0,
-                         -280.0]
-        view_center = [(shape[0] - 1) / 2.0,
-                       (shape[1] - 1) / 2.0,
-                       slice_index]
-        view_up = [0.0, 1.0, 0.0]
-        zoom_factor = 2.0 / shape[0] if shape[0] > shape[1] else 2.0 / shape[1]
-
     scene = window.Scene()
-    scene.projection('parallel')
+    scene.add(volume_actor)
+    if streamlines_actor:
+        scene.add(streamlines_actor)
+    elif peaks_actor:
+        scene.add(peaks_actor)
     scene.set_camera(position=view_position,
-                     focal_point=view_center,
-                     view_up=view_up)
-    scene.zoom(zoom_factor)
+                     view_up=view_up_vector,
+                     focal_point=focal_point)
 
-    return scene
-
-
-def crop_data_along_axis(data, idx, axis_name):
-    """
-    Crop data along a dimension specified by axis name at index idx
-    """
-    if axis_name == 'sagittal':
-        return data[idx:idx+1, :, :]
-    elif axis_name == 'coronal':
-        return data[:, idx:idx+1, :]
-    elif axis_name == 'axial':
-        return data[:, :, idx:idx+1]
-
-
-def display_scene(actors, shape, window_size, orientation,
-                  interactor, output, title, silent=False,
-                  slice_index=0):
-    """
-    Prepare and display a scene containing 'actors'
-    """
-    scene = prepare_scene(orientation, shape, slice_index)
-    if not silent:
-        showm = window.ShowManager(scene, size=window_size,
-                                   title=title,
-                                   reset_camera=False,
-                                   interactor_style=interactor)
-    for actor in actors:
-        scene.add(actor)
-
-    if not silent:
-        showm.initialize()
-        showm.start()
-
-    if output:
-        out_img = window.snapshot(scene, size=window_size)
-        io.save_image(out_img[::-1], output)
-
-
-def get_translation_matrix(translation):
-    return np.array([[1.0, 0.0, 0.0, translation[0]],
-                     [0.0, 1.0, 0.0, translation[1]],
-                     [0.0, 0.0, 1.0, translation[2]],
-                     [0.0, 0.0, 0.0, 1.0]])
-
-
-def prepare_texture_slicer_actor(data, min_value, max_value,
-                                 axis_name, colormap_lut=None,
-                                 slice_index=0, offset=0.5):
-    value_range = [data.min(), data.max()]
-    if min_value is not None:
-        value_range[0] = min_value
-    if max_value is not None:
-        value_range[1] = max_value
-    value_range = tuple(value_range)
-
-    if axis_name == 'sagittal':
-        slicer_actor =\
-            actor.slicer(data,
-                         affine=get_translation_matrix((offset, 0.0, 0.0)),
-                         value_range=value_range, interpolation='nearest',
-                         lookup_colormap=colormap_lut)
-        slicer_actor.display_extent(slice_index, slice_index,
-                                    0, data.shape[1] - 1,
-                                    0, data.shape[2] - 1)
-    elif axis_name == 'coronal':
-        slicer_actor =\
-             actor.slicer(data,
-                          affine=get_translation_matrix((0.0, -offset, 0.0)),
-                          value_range=value_range, interpolation='nearest',
-                          lookup_colormap=colormap_lut)
-        slicer_actor.display_extent(0, data.shape[0] - 1,
-                                    slice_index, slice_index,
-                                    0, data.shape[2] - 1)
-    elif axis_name == 'axial':
-        slicer_actor =\
-            actor.slicer(data,
-                         affine=get_translation_matrix((0.0, 0.0, offset)),
-                         value_range=value_range, interpolation='nearest',
-                         lookup_colormap=colormap_lut)
-        slicer_actor.display_extent(0, data.shape[0] - 1,
-                                    0, data.shape[1] - 1,
-                                    slice_index, slice_index)
-
-    return slicer_actor
-
-
-def create_colormap(nb_colors):
-    cm = np.array(colormap.distinguishable_colormap(
-            bg=(1.0, 0.0, 0.0),
-            exclude=[(0.0, 0.0, 0.0)],
-            nb_colors=nb_colors - 1))
-    cm = np.vstack(([0, 0, 0], cm))
-    lut = colormap.colormap_lookup_table(colors=cm,
-                                         scale_range=(0, nb_colors - 1))
-
-    return lut
+    snapshot(scene, output_filename, size=(1920, 1080), offscreen=True)

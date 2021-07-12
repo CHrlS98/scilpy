@@ -3,10 +3,10 @@
 import glob
 
 # Format expected by setup.py and doc/source/conf.py: string of form "X.Y.Z"
-_version_major = 0
-_version_minor = 2
+_version_major = 1
+_version_minor = 1
 _version_micro = ''
-_version_extra = 'dev'
+_version_extra = ''
 
 # Construct full version string from these.
 _ver = [_version_major, _version_minor]
@@ -50,8 +50,8 @@ Université de Sherbrooke.
 """
 
 NAME = "scilpy"
-MAINTAINER = "Jean-Christophe Houde"
-MAINTAINER_EMAIL = "jean.christophe.houde@gmail.com"
+MAINTAINER = "Arnaud Boré"
+MAINTAINER_EMAIL = "arnaud.bore@gmail.com"
 DESCRIPTION = description
 LONG_DESCRIPTION = long_description
 URL = "https://github.com/scilus/scilpy"
@@ -65,3 +65,5 @@ MINOR = _version_minor
 MICRO = _version_micro
 VERSION = __version__
 SCRIPTS = glob.glob("scripts/*.py")
+
+PREVIOUS_MAINTAINERS=["Jean-Christophe Houde"]

@@ -109,9 +109,20 @@ def _save_if_needed(sft, hdf5_file, args,
                     save_type, step_type,
                     in_label, out_label):
     if step_type == 'final':
+        # Due to the cutting, streamlines can become invalid
+        indices = []
+        for i in range(len(sft)):
+            norm = np.linalg.norm(np.gradient(sft.streamlines[i],
+                                              axis=0), axis=1)
+            if (norm < 0.001).any():  # or len(sft.streamlines[i]) <= 1:
+                indices.append(i)
+
+        indices = np.setdiff1d(range(len(sft)), indices).astype(np.uint32)
+        sft = sft[indices]
+
         group = hdf5_file.create_group('{}_{}'.format(in_label, out_label))
         group.create_dataset('data', data=sft.streamlines._data,
-                             dtype=np.float16)
+                             dtype=np.float32)
         group.create_dataset('offsets', data=sft.streamlines._offsets,
                              dtype=np.int64)
         group.create_dataset('lengths', data=sft.streamlines._lengths,
@@ -222,7 +233,8 @@ def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    assert_inputs_exist(parser, [args.in_tractogram, args.in_labels])
+    assert_inputs_exist(parser, [args.in_tractogram, args.in_labels],
+                        args.reference)
     assert_outputs_exist(parser, args, args.out_hdf5)
 
     # HDF5 will not overwrite the file
@@ -262,6 +274,7 @@ def main():
     time1 = time.time()
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram,
                                          bbox_check=False)
+    sft.remove_invalid_streamlines()
     time2 = time.time()
     logging.info('    Loading {} streamlines took {} sec.'.format(
         len(sft), round(time2 - time1, 2)))
