@@ -10,11 +10,16 @@ from scipy.interpolate import splprep, splev
 from dipy.io.stateful_tractogram import StatefulTractogram, Space, Origin
 from dipy.io.streamline import save_tractogram
 from dipy.data import get_sphere
+from dipy.reconst.shm import sf_to_sh, sph_harm_ind_list
 
-from scilpy.io.utils import (assert_inputs_exist, assert_outputs_exist,
+from scilpy.io.utils import (add_sh_basis_args,
+                             assert_inputs_exist,
+                             assert_outputs_exist,
                              add_overwrite_arg)
 
 from fury import window, actor
+
+DELTA_SPLINE = 0.001
 
 
 def _build_arg_parser():
@@ -22,11 +27,19 @@ def _build_arg_parser():
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument('in_config', help='JSON configuration file.')
     p.add_argument('out_tractogram', help='Output tractogram file.')
+    p.add_argument('out_sym_fodf', help='Output symmetric fODF file.')
+    p.add_argument('out_asym_fodf', help='Output asymmetric fODF file.')
+    p.add_argument('out_wm_mask', help='Output white matter mask file.')
+    p.add_argument('out_endpoints_mask', help='Output endpoint mask file.')
 
-    p.add_argument('--volume_size', nargs=3, default=(10, 10, 10), type=int)
-    p.add_argument('--fiber_decay', default=40, type=float,
+    p.add_argument('--volume_size', nargs=3, default=[10, 10, 10], type=int,
+                   help='Size of the 3-dimensional volume.')
+    p.add_argument('--fiber_decay', default=10, type=float,
                    help='Sharpness for a single fiber lobe.')
 
+    p.add_argument('--sh_order', default=8, type=int,
+                   help='Maximum SH order for FODF reconstruction.')
+    add_sh_basis_args(p)
     add_overwrite_arg(p)
     return p
 
@@ -52,7 +65,7 @@ def transform_streamlines_to_vox(streamlines, volume_size):
 
     # transform to voxel space
     max_coords -= min_coords
-    scaling = np.min(np.array(volume_size) / max_coords)
+    scaling = np.min(np.array(volume_size) / (max_coords + 0.01))
     for s in streamlines:
         s -= min_coords
         s *= scaling
@@ -63,55 +76,34 @@ def transform_streamlines_to_vox(streamlines, volume_size):
 def streamlines_to_segments(streamlines):
     seg_dirs = []
     seg_lengths = []
-    vox_ids = []
+    seg_pos = []
     for s in streamlines:
         segments = s[1:] - s[:-1]
         lengths = np.linalg.norm(segments, axis=-1, keepdims=True)
         dirs = segments / lengths
 
-        vox_ids.append(np.floor(s[:-1] + segments / 2).astype(int))
+        seg_pos.append(s[:-1] + segments / 2)
         seg_dirs.append(dirs)
         seg_lengths.append(lengths)
 
     seg_dirs = np.vstack(seg_dirs)
     seg_lengths = np.vstack(seg_lengths)
-    vox_ids = np.vstack(vox_ids)
+    seg_pos = np.vstack(seg_pos)
 
-    print(seg_dirs.shape)
-    print(seg_lengths.shape)
-    print(vox_ids.shape)
-    return seg_dirs, seg_lengths, vox_ids
+    return seg_dirs, seg_lengths, seg_pos
 
 
-def vonMisesFisher(x, mu, kappa):
+def vonMisesFisher(x, mu, kappa, lmax_norm=False):
     ck = kappa / (4.0*np.pi*np.sinh(kappa))
-    return ck * np.exp(kappa * mu.dot(x.T))
+    ret = ck * np.exp(kappa * mu.dot(x.T))
+    if lmax_norm:
+        return ret / ret.max()
+    return ret
 
 
-def main():
-    parser = _build_arg_parser()
-    args = parser.parse_args()
-    assert_inputs_exist(parser, args.in_config)
-    assert_outputs_exist(parser, args, args.out_tractogram)
-
-    with open(args.in_config, 'r') as f:
-        config = json.load(f)
-
-    sphere = get_sphere('repulsion724').subdivide(2)
-    mu = np.array([1, 0, 0]).reshape((1, 3))
-    kappa = 40
-    vmf = vonMisesFisher(sphere.vertices, mu, kappa)
-    vmf /= vmf.max()  # represents a fiber element of unit length
-
-    odf = actor.odf_slicer(vmf[None, None, :, :], sphere=sphere)
-    scene = window.Scene()
-    scene.add(odf)
-    # window.show(scene)
-
+def generate_streamlines(config_dict, volume_size):
     streamlines = []
-    streamlines_tangent = []
-    DELTA_SPLINE = 0.001
-    for bundle in config['bundles']:
+    for bundle in config_dict['bundles']:
         centroid = np.array(bundle['centroids']).astype(float)
         up = np.array(bundle['up_vectors']).astype(float)
 
@@ -138,25 +130,111 @@ def main():
             points = centroid_approx + radius * np.cos(theta) * N\
                 + radius * np.sin(theta) * B
             tck, _ = splprep(points.T, s=0)
-            x_approx = np.array(splev(np.linspace(0, 1, 100), tck)).T
+            x_approx = np.array(
+                splev(np.linspace(0, 1, bundle['n_steps']), tck)).T
             streamlines.append(x_approx)
 
     # transform streamlines to voxel space
-    streamlines = transform_streamlines_to_vox(streamlines, args.volume_size)
+    streamlines = transform_streamlines_to_vox(streamlines, volume_size)
+    strl_start = [s[0] for s in streamlines]
+    strl_stop = [s[-1] for s in streamlines]
+    endpoints_vox = np.floor(strl_start + strl_stop).astype(int)
+    unique = np.unique(endpoints_vox, axis=0)
+    endpoints = np.zeros(volume_size, dtype=bool)
+    endpoints[unique[:, 0], unique[:, 1], unique[:, 2]] = True
 
-    header = nib.Nifti1Header()
-    header.set_data_shape(args.volume_size)
-    header.set_sform(np.identity(4), code='scanner')
+    return streamlines, endpoints
 
-    sft = StatefulTractogram(streamlines, reference=header,
+
+def generate_fiber_odf(streamlines, volume_size, fiber_decay, sh_order):
+    # generate ground truth fODF by modeling fiber segments with
+    # von Mises-Fisher distributions (similar to TODI).
+    dirs, lengths, positions = streamlines_to_segments(streamlines)
+    vox_ids = np.floor(positions).astype(int)
+    unique_voxids = np.unique(vox_ids, axis=0)
+
+    sphere = get_sphere('repulsion724').subdivide(2)
+    odf = np.zeros(volume_size + [81])
+    sf_max = 0.0
+    for vox_id in unique_voxids:
+        vox_mask = np.all(vox_ids == vox_id, axis=-1)
+        vox_dirs = dirs[vox_mask]
+        vox_lengths = lengths[vox_mask]
+        vox_pos = positions[vox_mask]
+        sf = np.zeros((1, len(sphere.vertices)))
+        for dir, leng, pos in zip(vox_dirs, vox_lengths, vox_pos):
+            pos = pos - np.floor(pos)
+            ctr_to_pos = pos - np.array([0.5, 0.5, 0.5])
+            if ctr_to_pos.dot(dir) < 0:
+                dir = -dir
+            sf += vonMisesFisher(sphere.vertices, dir,
+                                 fiber_decay,
+                                 lmax_norm=True) * leng
+            sf_max = max(sf.max(), sf_max)
+
+        odf[vox_id[0], vox_id[1], vox_id[2]] = sf_to_sh(sf, sphere,
+                                                        sh_order=sh_order,
+                                                        full_basis=True)
+
+    # heuristic so that the largest ODF is not more than 2 voxels wide
+    # (this only matters for visualisation)
+    return odf / sf_max
+
+
+def main():
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+    assert_inputs_exist(parser, args.in_config)
+    assert_outputs_exist(parser, args, [args.out_tractogram,
+                                        args.out_sym_fodf,
+                                        args.out_asym_fodf,
+                                        args.out_endpoints_mask,
+                                        args.out_wm_mask])
+
+    with open(args.in_config, 'r') as f:
+        config = json.load(f)
+
+    streamlines, endpoints = generate_streamlines(config, args.volume_size)
+
+    template_header = nib.Nifti1Header()
+    template_header.set_data_shape(args.volume_size)
+    template_header.set_sform(np.identity(4), code='scanner')
+
+    sft_header = nib.Nifti1Header().from_header(template_header)
+
+    sft = StatefulTractogram(streamlines, reference=sft_header,
                              space=Space.VOX,
                              origin=Origin.TRACKVIS)
 
+    endpoints_header = nib.Nifti1Header().from_header(template_header)
+    endpoints_header.set_data_dtype(np.dtype(np.uint8))
+    nib.save(nib.Nifti1Image(endpoints.astype(np.uint8), None,
+                             header=endpoints_header),
+             args.out_endpoints_mask)
+
     save_tractogram(sft, args.out_tractogram)
 
-    dirs, lengths, pos = streamlines_to_segments(streamlines)
-    unique_voxids = np.unique(pos, axis=0)
-    print(unique_voxids)
+    # generate ground truth fODF by modeling fiber segments with
+    # von Mises-Fisher distributions (similar to TODI).
+    fodf = generate_fiber_odf(streamlines, args.volume_size,
+                              args.fiber_decay, args.sh_order)
+
+    fodf_header = nib.Nifti1Header().from_header(template_header)
+    fodf_header.set_data_dtype(np.dtype(np.float32))
+    nib.save(nib.Nifti1Image(fodf.astype(np.float32), None,
+                             header=fodf_header),
+             args.out_asym_fodf)
+
+    _, orders = sph_harm_ind_list(args.sh_order, full_basis=True)
+    nib.save(nib.Nifti1Image(fodf[..., orders % 2 == 0].astype(np.float32),
+                             None, header=fodf_header),
+             args.out_sym_fodf)
+
+    # because the background is 0, the WM mask is the non-zero voxels in fodf
+    wm_mask = np.any(np.abs(fodf) > 0.0, axis=-1)
+    nib.save(nib.Nifti1Image(wm_mask.astype(np.uint8), None,
+                             header=endpoints_header),
+             args.out_wm_mask)
 
 
 if __name__ == '__main__':
