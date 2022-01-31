@@ -17,8 +17,6 @@ from scilpy.io.utils import (add_sh_basis_args,
                              assert_outputs_exist,
                              add_overwrite_arg)
 
-from fury import window, actor
-
 DELTA_SPLINE = 0.001
 DEFAULT_TRK_OUTPUT = 'sim.trk'
 DEFAULT_FODF_OUTPUT = 'fodf.nii.gz'
@@ -52,6 +50,10 @@ def _build_arg_parser():
                    help='Size of the 3-dimensional volume.')
     p.add_argument('--fiber_decay', default=10, type=float,
                    help='Sharpness for a single fiber lobe.')
+
+    p.add_argument('--disable_center_of_mass', action='store_true',
+                   help='Disable the use of streamline center of mass when '
+                        'constructing fiber ODFs')
 
     p.add_argument('--sh_order', default=8, type=int,
                    help='Maximum SH order for FODF reconstruction.')
@@ -166,7 +168,7 @@ def generate_streamlines(config_dict, volume_size):
 
 
 def generate_fiber_odf(streamlines, volume_size, fiber_decay,
-                       sh_order, sh_basis):
+                       sh_order, sh_basis, translate_on_ctr_of_mass):
     # generate ground truth fODF by modeling fiber segments with
     # von Mises-Fisher distributions (similar to TODI).
     dirs, lengths, positions = streamlines_to_segments(streamlines)
@@ -184,11 +186,15 @@ def generate_fiber_odf(streamlines, volume_size, fiber_decay,
         vox_dirs = dirs[vox_mask]
         vox_lengths = lengths[vox_mask]
         vox_pos = positions[vox_mask]
-        center_of_mass = np.mean(vox_pos, axis=0)
+        if translate_on_ctr_of_mass:
+            center_of_mass = np.mean(vox_pos, axis=0)
         sf = np.zeros((1, len(sphere.vertices)))
         for dir, leng, pos in zip(vox_dirs, vox_lengths, vox_pos):
             pos = pos - np.floor(pos)
-            center_of_mass = center_of_mass - np.floor(center_of_mass)
+            if translate_on_ctr_of_mass:
+                center_of_mass = center_of_mass - np.floor(center_of_mass)
+            else:
+                center_of_mass = np.array([0.5, 0.5, 0.5])
             ctr_to_pos = pos - center_of_mass
             if ctr_to_pos.dot(dir) < 0:
                 dir = -dir
@@ -240,9 +246,10 @@ def main():
 
     # generate ground truth fODF by modeling fiber segments with
     # von Mises-Fisher distributions (similar to TODI).
-    fodf = generate_fiber_odf(streamlines, args.volume_size,
-                              args.fiber_decay, args.sh_order,
-                              args.sh_basis)
+    fodf = generate_fiber_odf(streamlines,
+                              args.volume_size, args.fiber_decay,
+                              args.sh_order, args.sh_basis,
+                              not args.disable_center_of_mass)
 
     fodf_header = nib.Nifti1Header().from_header(template_header)
     fodf_header.set_data_dtype(np.dtype(np.float32))
