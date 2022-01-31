@@ -12,17 +12,10 @@ from dipy.io.streamline import save_tractogram
 from dipy.data import get_sphere
 from dipy.reconst.shm import sph_harm_ind_list, sh_to_sf_matrix
 
-from scilpy.io.utils import (add_sh_basis_args,
-                             assert_inputs_exist,
-                             assert_outputs_exist,
-                             add_overwrite_arg)
+from scilpy.io.utils import (add_sh_basis_args, assert_inputs_exist,
+                             assert_outputs_exist, add_overwrite_arg)
 
 DELTA_SPLINE = 0.001
-DEFAULT_TRK_OUTPUT = 'sim.trk'
-DEFAULT_FODF_OUTPUT = 'fodf.nii.gz'
-DEFAULT_ASYM_FODF_OUTPUT = 'asym_fodf.nii.gz'
-DEFAULT_WM_MASK_OUTPUT = 'wm.nii.gz'
-DEFAULT_ENDPOINTS_OUTPUT = 'endpoints.nii.gz'
 
 
 def _build_arg_parser():
@@ -30,21 +23,16 @@ def _build_arg_parser():
         description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument('in_config', help='JSON configuration file.')
 
-    p.add_argument('--out_tractogram', default=DEFAULT_TRK_OUTPUT,
-                   help='Output tractogram file. [{}]'
-                        .format(DEFAULT_TRK_OUTPUT))
-    p.add_argument('--out_sym_fodf', default=DEFAULT_FODF_OUTPUT,
-                   help='Output symmetric fODF file. [{}]'
-                        .format(DEFAULT_FODF_OUTPUT))
-    p.add_argument('--out_asym_fodf', default=DEFAULT_ASYM_FODF_OUTPUT,
-                   help='Output asymmetric fODF file. [{}]'
-                        .format(DEFAULT_ASYM_FODF_OUTPUT))
-    p.add_argument('--out_wm_mask', default=DEFAULT_WM_MASK_OUTPUT,
-                   help='Output white matter mask file. [{}]'
-                        .format(DEFAULT_WM_MASK_OUTPUT))
-    p.add_argument('--out_endpoints_mask', default=DEFAULT_ENDPOINTS_OUTPUT,
-                   help='Output endpoint mask file. [{}]'
-                        .format(DEFAULT_ENDPOINTS_OUTPUT))
+    p.add_argument('--out_tractogram', default='sim.trk',
+                   help='Output tractogram file. [%(default)s]')
+    p.add_argument('--out_sym_fodf', default='fodf.nii.gz',
+                   help='Output symmetric fODF file. [%(default)s]')
+    p.add_argument('--out_asym_fodf', default='asym_fodf.nii.gz',
+                   help='Output asymmetric fODF file. [%(default)s]')
+    p.add_argument('--out_wm_mask', default='wm.nii.gz',
+                   help='Output white matter mask file. [%(default)s]')
+    p.add_argument('--out_endpoints_mask', default='endpoints.nii.gz',
+                   help='Output endpoint mask file. [%(default)s]')
 
     p.add_argument('--volume_size', nargs=3, default=[10, 10, 10], type=int,
                    help='Size of the 3-dimensional volume.')
