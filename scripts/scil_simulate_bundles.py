@@ -15,6 +15,8 @@ from dipy.reconst.shm import sph_harm_ind_list, sh_to_sf_matrix
 from scilpy.io.utils import (add_sh_basis_args, assert_inputs_exist,
                              assert_outputs_exist, add_overwrite_arg)
 
+from fury import window, actor
+
 DELTA_SPLINE = 0.001
 
 
@@ -42,6 +44,8 @@ def _build_arg_parser():
     p.add_argument('--disable_center_of_mass', action='store_true',
                    help='Disable the use of streamline center of mass when '
                         'constructing fiber ODFs')
+    p.add_argument('--interactive', action='store_true',
+                   help='Enable interactive mode.')
 
     p.add_argument('--sh_order', default=8, type=int,
                    help='Maximum SH order for FODF reconstruction.')
@@ -127,6 +131,7 @@ def generate_streamlines(config_dict, volume_size):
         up /= np.linalg.norm(up, axis=-1, keepdims=True)
         N = up - np.array([up[i].dot(T[i]) for i in range(len(up))])\
             .reshape((-1, 1))*T
+        N /= np.linalg.norm(N)[..., None]
 
         B = np.cross(T, N)
 
@@ -213,6 +218,14 @@ def main():
         config = json.load(f)
 
     streamlines, endpoints = generate_streamlines(config, args.volume_size)
+
+    if args.interactive:
+        strl_actor = actor.line(streamlines)
+        scene = window.Scene()
+        scene.add(strl_actor)
+        window.show(scene)
+        if input("Continue (Y/N)? ").lower() == 'n':
+            return
 
     template_header = nib.Nifti1Header()
     template_header.set_data_shape(args.volume_size)
