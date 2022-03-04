@@ -23,8 +23,9 @@ class Tracker(object):
     def __init__(self, propagator: AbstractPropagator, mask: DataVolume,
                  seed_generator: SeedGenerator, nbr_seeds, min_nbr_pts,
                  max_nbr_pts, max_invalid_dirs, compression_th=0.1,
-                 nbr_processes=1, save_seeds=False, mmap_mode=None,
-                 rng_seed=1234, track_forward_only=False, skip=0):
+                 nbr_processes=1, save_probability=False, save_seeds=False,
+                 mmap_mode=None, rng_seed=1234, track_forward_only=False,
+                 skip=0):
         """
         Parameters
         ----------
@@ -49,8 +50,9 @@ class Tracker(object):
             Whether to save the seeds associated to their respective
             streamlines.
         mmap_mode: str
-            Memory-mapping mode. One of {None, 'r+', 'c'}. This value is passed to
-            np.load() when loading the raw tracking data from a subprocess.
+            Memory-mapping mode. One of {None, 'r+', 'c'}. This value is
+            passed to np.load() when loading the raw tracking data from
+            a subprocess.
         rng_seed: int
             The random "seed" for the random generator.
         track_forward_only: bool
@@ -70,11 +72,15 @@ class Tracker(object):
         self.max_nbr_pts = max_nbr_pts
         self.max_invalid_dirs = max_invalid_dirs
         self.compression_th = compression_th
+        self.save_probability = save_probability
         self.save_seeds = save_seeds
         self.mmap_mode = mmap_mode
         self.rng_seed = rng_seed
         self.track_forward_only = track_forward_only
         self.skip = skip
+
+        if self.save_probability:
+            logging.warning('Streamlines probability not implemented yet.')
 
         # Everything scilpy.tracking is in 'corner', 'voxmm'
         self.origin = 'corner'
@@ -126,8 +132,8 @@ class Tracker(object):
                                             initargs=(data_file_name,
                                                       self.mmap_mode))
 
-                lines_per_process, seeds_per_process = zip(*pool.map(
-                    self._get_streamlines_sub, chunk_ids))
+                lines_per_process, seeds_per_process =\
+                    zip(*pool.map(self._get_streamlines_sub, chunk_ids))
                 pool.close()
                 # Make sure all worker processes have exited before leaving
                 # context manager.
@@ -311,19 +317,20 @@ class Tracker(object):
         """
         invalid_direction_count = 0
         propagation_can_continue = True
+
         while len(line) < self.max_nbr_pts and propagation_can_continue:
-            new_pos, new_tracking_info, is_direction_valid = \
-                self.propagator.propagate(line[-1], tracking_info)
+            new_tracking_info = self.propagator.propagate(line[-1],
+                                                          tracking_info)
 
             # Verifying and appending
-            if is_direction_valid:
+            if new_tracking_info.is_valid_direction:
                 invalid_direction_count = 0
             else:
                 invalid_direction_count += 1
             propagation_can_continue = self._verify_stopping_criteria(
-                invalid_direction_count, new_pos)
+                invalid_direction_count, new_tracking_info.position)
             if propagation_can_continue:
-                line.append(new_pos)
+                line.append(new_tracking_info.position)
 
             tracking_info = new_tracking_info
 

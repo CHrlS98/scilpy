@@ -15,6 +15,21 @@ class PropagationStatus(Enum):
     ERROR = 1
 
 
+class TrackingInfo(object):
+    """
+    Tracking information returned by a propagator.
+
+    Minimally contains a position, direction and validity status. Also has
+    an optional dictionary that can contain additionnal tracking information.
+    """
+    def __init__(self, position=None, direction=None,
+                 is_valid=None, other={}):
+        self.position = position
+        self.direction = direction
+        self.other = other
+        self.is_valid_direction = is_valid
+
+
 class AbstractPropagator(object):
     """
     Abstract class for propagator object. "Propagation" means continuing the
@@ -74,7 +89,7 @@ class AbstractPropagator(object):
         """
         raise NotImplementedError
 
-    def prepare_backward(self, line, forward_dir):
+    def prepare_backward(self, line, tracking_info_fwd):
         """
         Called at the beginning of backward tracking, in case we need to
         reset some parameters
@@ -95,13 +110,15 @@ class AbstractPropagator(object):
         """
         if len(line) > 1:
             v = line[-1] - line[-2]
-            return v / np.linalg.norm(v)
-        elif forward_dir is not None:
-            return [-dir_i for dir_i in forward_dir]
+            v /= np.linalg.norm(v)
+            return TrackingInfo(direction=v)
+        elif tracking_info_fwd.direction is not None:
+            inv_dir = -np.asarray(tracking_info_fwd.direction)
+            return TrackingInfo(direction=inv_dir)
         else:
             return None
 
-    def finalize_streamline(self, last_pos, v_in):
+    def finalize_streamline(self, last_pos, in_tracking_info):
         """
         Return the last position of the streamline.
 
@@ -124,7 +141,8 @@ class AbstractPropagator(object):
 
         # In this abstract class, tracking_information only contains the last
         # tracking direction.
-        final_pos = last_pos + self.step_size * np.array(v_in)
+        final_pos = last_pos + self.step_size\
+            * np.array(in_tracking_info.direction)
         return final_pos
 
     def _sample_next_direction_or_go_straight(self, pos, v_in):
@@ -138,9 +156,9 @@ class AbstractPropagator(object):
             is_direction_valid = False
             v_out = v_in
 
-        return is_direction_valid, v_out
+        return TrackingInfo(direction=v_out, is_valid=is_direction_valid)
 
-    def propagate(self, pos, v_in):
+    def propagate(self, pos, in_tracking_info):
         """
         Given the current position and direction, computes the next position
         and direction using Runge-Kutta integration method. If no valid
@@ -162,37 +180,43 @@ class AbstractPropagator(object):
         is_direction_valid: bool
             True if new_dir is valid.
         """
+        v_in = in_tracking_info.direction
+
         if self.rk_order == 1:
-            is_direction_valid, new_dir = \
-                self._sample_next_direction_or_go_straight(pos, v_in)
+            tracking_info = self._sample_next_direction_or_go_straight(pos,
+                                                                       v_in)
 
         elif self.rk_order == 2:
-            is_direction_valid, dir1 = \
+            info1 = \
                 self._sample_next_direction_or_go_straight(pos, v_in)
-            _, new_dir = self._sample_next_direction_or_go_straight(
-                pos + 0.5 * self.step_size * np.array(dir1), dir1)
+            tracking_info = self._sample_next_direction_or_go_straight(
+                pos + 0.5 * self.step_size * np.array(info1.direction),
+                info1.direction)
+            tracking_info.is_valid_direction = info1.is_valid_direction
 
         else:
             # case self.rk_order == 4
-            is_direction_valid, dir1 = \
-                self._sample_next_direction_or_go_straight(pos, v_in)
-            v1 = np.array(dir1)
-            _, dir2 = self._sample_next_direction_or_go_straight(
-                pos + 0.5 * self.step_size * v1, dir1)
-            v2 = np.array(dir2)
-            _, dir3 = self._sample_next_direction_or_go_straight(
-                pos + 0.5 * self.step_size * v2, dir2)
-            v3 = np.array(dir3)
-            _, dir4 = self._sample_next_direction_or_go_straight(
-                pos + self.step_size * v3, dir3)
-            v4 = np.array(dir4)
+            tmp_info1 = self._sample_next_direction_or_go_straight(pos, v_in)
+            v1 = np.array(tmp_info1.direction)
+            tmp_info2 = self._sample_next_direction_or_go_straight(
+                pos + 0.5 * self.step_size * v1, tmp_info1.direction)
+            v2 = np.array(tmp_info2.direction)
+            tmp_info3 = self._sample_next_direction_or_go_straight(
+                pos + 0.5 * self.step_size * v2, tmp_info2.direction)
+            v3 = np.array(tmp_info3.direction)
+            tmp_info4 = self._sample_next_direction_or_go_straight(
+                pos + self.step_size * v3, tmp_info3.direction)
+            v4 = np.array(tmp_info4.direction)
 
             new_v = (v1 + 2 * v2 + 2 * v3 + v4) / 6
-            new_dir = TrackingDirection(new_v, dir1.index)
+            new_dir = TrackingDirection(new_v, tmp_info1.direction.index)
+            tracking_info = TrackingInfo(direction=new_dir,
+                                         is_valid=tmp_info1.is_valid_direction)
 
-        new_pos = pos + self.step_size * np.array(new_dir)
+        tracking_info.position = pos + self.step_size\
+            * np.array(tracking_info.direction)
 
-        return new_pos, new_dir, is_direction_valid
+        return tracking_info
 
     def is_voxmm_in_bound(self, pos, origin):
         """
@@ -263,7 +287,7 @@ class PropagatorOnSphere(AbstractPropagator):
     def prepare_forward(self, seeding_pos):
         raise NotImplementedError
 
-    def prepare_backward(self, line, forward_dir):
+    def prepare_backward(self, line, in_tracking_info):
         """
         Called at the beginning of backward tracking, in case we need to
         reset some parameters
@@ -286,13 +310,15 @@ class PropagatorOnSphere(AbstractPropagator):
             last_dir = line[-1] - line[-2]
             ind = self.sphere.find_closest(last_dir)
         else:
-            backward_dir = -np.asarray(forward_dir)
+            fwd_dir = in_tracking_info.direction
+            backward_dir = -np.asarray(fwd_dir)
             ind = self.sphere.find_closest(backward_dir)
 
         # toDo. Is using a TrackingDirection necessary compared to a direction
         #  x,y, z or rho, phi? self.sphere.vertices[ind] might not be
         #  exactly equal to last_dir or to backward_dir.
-        return TrackingDirection(self.sphere.vertices[ind], ind)
+        return TrackingInfo(
+            direction=TrackingDirection(self.sphere.vertices[ind], ind))
 
     def _sample_next_direction(self, pos, v_in):
         """
@@ -435,7 +461,8 @@ class ODFPropagator(PropagatorOnSphere):
 
         if np.sum(sf) > 0:
             ind = sample_distribution(sf)
-            return TrackingDirection(self.dirs[ind], ind)
+            return TrackingInfo(
+                direction=TrackingDirection(self.dirs[ind], ind))
 
         # Else: sf at current position is smaller than acceptable threshold in
         # all directions.
@@ -536,225 +563,3 @@ class ODFPropagator(PropagatorOnSphere):
             if 0 < sf[i] == np.max(sf[self.maxima_neighbours[i]]):
                 maxima.append(self.dirs[i])
         return maxima
-
-
-class ProbabilisticODFPropagatorDeluxe(PropagatorOnSphere):
-    """
-    Deluxe probabilistic ODF propagator; returns probability of step at each
-    """
-    def __init__(self, dataset, step_size,
-                 basis, sf_threshold, sf_threshold_init,
-                 theta, dipy_sphere='symmetric724',
-                 min_separation_angle=np.pi / 16.):
-        """
-
-        Parameters
-        ----------
-        dataset: scilpy.image.datasets.DataVolume
-            Trackable Dataset object.
-        step_size: float
-            The step size for tracking.
-        rk_order: int
-            Order for the Runge Kutta integration.
-        theta: float
-            Maximum angle (radians) between two steps.
-        dipy_sphere: string, optional
-            If necessary, name of the DIPY sphere object to use to evaluate
-            directions.
-        basis: string
-            SH basis name. One of 'tournier07' or 'descoteaux07'
-        sf_threshold: float
-            Threshold on spherical function (SF).
-        sf_threshold_init: float
-            Threshold on spherical function when initializing a new streamline.
-        theta: float
-            Maximum angle (radians) between two steps.
-        dipy_sphere: string, optional
-            Name of the DIPY sphere object to use for evaluating SH. Can't be
-            None.
-        min_separation_angle: float, optional
-            Minimum separation angle (in radians) for peaks extraction. Used
-            for deterministic tracking. A candidate direction is a maximum if
-            its SF value is greater than all other SF values in its
-            neighbourhood, where the neighbourhood includes all the sphere
-            directions located at most `min_separation_angle` from the
-            candidate direction.
-        """
-        super().__init__(dataset, step_size, 1, dipy_sphere)
-
-        # Propagation params
-        self.theta = theta
-        self.tracking_neighbours = get_sphere_neighbours(self.sphere,
-                                                         self.theta)
-        # For deterministic tracking:
-        self.maxima_neighbours = get_sphere_neighbours(self.sphere,
-                                                       min_separation_angle)
-
-        # ODF params
-        self.sf_threshold = sf_threshold
-        self.sf_threshold_init = sf_threshold_init
-        sh_order, full_basis =\
-            get_sh_order_and_fullness(self.dataset.data.shape[-1])
-        self.basis = basis
-        self.B = sh_to_sf_matrix(self.sphere, sh_order, self.basis,
-                                 smooth=0.006, return_inv=False,
-                                 full_basis=full_basis)
-
-    def _get_sf(self, pos):
-        """
-        Get the spherical function at position pos.
-
-        Parameters
-        ----------
-        pos: ndarray (3,)
-            Position in voxmm in the trackable dataset.
-
-        Return
-        ------
-        sf: ndarray (len(self.sphere.vertices),)
-            Spherical function evaluated at pos, normalized by
-            its maximum amplitude.
-        """
-        sh = self.dataset.voxmm_to_value(*pos, self.origin)
-        sf = np.dot(self.B.T, sh).reshape((-1, 1))
-
-        sf_max = np.max(sf)
-        if sf_max > 0:
-            sf /= sf_max
-        return sf
-
-    def prepare_forward(self, seeding_pos):
-        """
-        Prepare information necessary at the first point of the
-        streamline for forward propagation: v_in and any other information
-        necessary for the self.propagate method.
-
-        About v_in: it is used for two things:
-        - To sample the next direction based on _sample_next_direction method.
-         Ex, with fODF, it defines a cone theta of accepable directions.
-        - If no valid next dir are found, continue straight.
-
-        Parameters
-        ----------
-        seeding_pos: tuple(x,y,z)
-
-        Returns
-        -------
-        v_in: TrackingDirection
-            The "fake" previous direction at first step. Could be None if your
-            propagator can propagate without knowledge of previous direction.
-            Return PropagationStatus.Error if no good tracking direction can be
-            set at current seeding position.
-        """
-        # Sampling on the SF values (no matter if general algo is det or prob)
-        # with a different threshold than usual (sf_threshold_init).
-        # So the initial step's propagation will be in a cone theta around a
-        # "more probable" peak.
-        sf = self._get_sf(seeding_pos)
-        sf[sf < self.sf_threshold_init] = 0
-
-        if np.sum(sf) > 0:
-            ind = sample_distribution(sf)
-            return TrackingDirection(self.dirs[ind], ind)
-
-        # Else: sf at current position is smaller than acceptable threshold in
-        # all directions.
-        return PropagationStatus.ERROR
-
-    def _sample_next_direction(self, pos, v_in):
-        """
-        Chooses a next tracking direction from all possible directions offered
-        by the tracking field.
-
-        Parameters
-        ----------
-        pos: ndarray (3,)
-            Current tracking position.
-        v_in: ndarray (3,)
-            Previous tracking direction.
-
-        Return
-        ------
-        direction: ndarray (3,)
-            A valid tracking direction. None if no valid direction is found.
-        """
-        # Tracking field returns the sf and directions
-        sf, directions = self._get_possible_next_dirs_prob(pos, v_in)
-
-        # Sampling one.
-        sf_sum = np.sum(sf)
-        if sf_sum > 0:
-            ind = sample_distribution(sf)
-            v_out = directions[ind]
-            prob = sf[ind] / sf_sum
-            return v_out, prob
-        return None, 0.0
-
-    def _get_possible_next_dirs_prob(self, pos, v_in):
-        """
-        Get the spherical functions thresholded at position pos, for a given
-        direction.
-
-        Parameters
-        ----------
-        pos: ndarray (3,)
-            Position in trackable dataset, expressed in mm.
-        v_in: TrackingDirection
-            Incoming direction. Outcoming direction won't be further than an
-            angle theta.
-
-        Return
-        ------
-        value: tuple
-            The neighbours SF evaluated at pos in given direction and
-            corresponding tracking directions.
-        """
-        sf = self._get_sf(pos)
-        sf[sf < self.sf_threshold] = 0
-        inds = np.nonzero(
-            self.tracking_neighbours[v_in.index])[0]
-        return sf[inds], self.dirs[inds]
-
-    def _sample_next_direction_or_go_straight(self, pos, v_in):
-        """
-        Same as _sample_next_direction but if no valid direction has been
-        found, return v_in as v_out.
-        """
-        is_direction_valid = True
-
-        # next step direction and probability of next step
-        v_out, p_out = self._sample_next_direction(pos, v_in)
-        if v_out is None:
-            is_direction_valid = False
-            v_out = v_in
-
-        return is_direction_valid, v_out, p_out
-
-    def propagate(self, pos, v_in):
-        """
-        Given the current position and direction, computes the next position
-        and direction using Runge-Kutta integration method. If no valid
-        tracking direction is available, v_in is chosen.
-
-        Parameters
-        ----------
-        pos: ndarrray (3,)
-            Current position.
-        v_in: ndarray (3,) or TrackingDirection
-            Previous tracking direction.
-
-        Return
-        ------
-        new_pos: ndarray (3,)
-            The new segment position.
-        new_dir: ndarray (3,) or TrackingDirection
-            The new segment direction.
-        is_direction_valid: bool
-            True if new_dir is valid.
-        """
-        is_direction_valid, new_dir, p_out = \
-            self._sample_next_direction_or_go_straight(pos, v_in)
-
-        new_pos = pos + self.step_size * np.array(new_dir)
-
-        return new_pos, new_dir, is_direction_valid, p_out

@@ -110,7 +110,10 @@ def _build_arg_parser():
     m_g = p.add_argument_group('Memory options')
     add_processes_arg(m_g)
 
-    add_out_options(p)
+    out_g = add_out_options(p)
+    out_g.add_argument('--save_probability', action='store_true',
+                       help='Save the probability associated with each'
+                            '  streamline.')
     add_verbose_arg(p)
 
     return p
@@ -182,6 +185,7 @@ def main():
                       compression_th=args.compress,
                       nbr_processes=args.nbr_processes,
                       save_seeds=args.save_seeds,
+                      save_probability=args.save_probability,
                       mmap_mode='r+', rng_seed=args.rng_seed,
                       track_forward_only=args.forward_only,
                       skip=args.skip)
