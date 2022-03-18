@@ -202,7 +202,7 @@ def main():
         random_seed=args.seed)
 
     # Tracking is performed in voxel space
-    max_steps = int(args.max_length / args.step_size) + 1
+    max_steps = int(args.max_length / args.step_size / 2.0)
     streamlines_generator = LocalTracking(
         _get_direction_getter(args),
         BinaryStoppingCriterion(mask_data),
@@ -218,13 +218,13 @@ def main():
 
     if args.save_seeds:
         filtered_streamlines, seeds = \
-            zip(*((s, p) for s, p in streamlines_generator
-                  if scaled_min_length <= length(s) <= scaled_max_length))
+            zip(*((s, p) for s, p in streamlines_generator))
+        # if scaled_min_length <= length(s) <= scaled_max_length))
         data_per_streamlines = {'seeds': lambda: seeds}
     else:
         filtered_streamlines = \
-            (s for s in streamlines_generator
-             if scaled_min_length <= length(s) <= scaled_max_length)
+            (s for s in streamlines_generator)
+        # if scaled_min_length <= length(s) <= scaled_max_length)
         data_per_streamlines = {}
 
     if args.compress:
