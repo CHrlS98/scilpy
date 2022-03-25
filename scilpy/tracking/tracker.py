@@ -24,7 +24,8 @@ class Tracker(object):
                  seed_generator: SeedGenerator, nbr_seeds, min_nbr_pts,
                  max_nbr_pts, max_invalid_dirs, compression_th=0.1,
                  nbr_processes=1, save_seeds=False, mmap_mode=None,
-                 rng_seed=1234, track_forward_only=False, skip=0):
+                 rng_seed=1234, track_forward_only=False, skip=0,
+                 return_all=False, finalize_streamlines=True):
         """
         Parameters
         ----------
@@ -37,9 +38,9 @@ class Tracker(object):
         nbr_seeds: int
             Number of seeds to create via the seed generator.
         min_nbr_pts: int
-            Minimum number of points for streamlines.
+            Minimum number of points for valid streamlines.
         max_nbr_pts: int
-            Maximum number of points for streamlines.
+            Maximum number of points for valid streamlines.
         max_invalid_dirs: int
             Number of consecutives invalid directions allowed during tracking.
         compression_th : float,
@@ -63,6 +64,12 @@ class Tracker(object):
             tractogram with a fixed rng_seed. Ex: If tractogram_1 was created
             with nbr_seeds=1,000,000, you can create tractogram_2 with
             skip 1,000,000.
+        return_all: bool
+            If true, return all streamlines without discarding the ones that
+            are too short or too long.
+        finalize_streamlines: bool
+            If True, an additional step is performed to finalize streamlines
+            by calling propagator.finalize_streamline().
         """
         self.propagator = propagator
         self.mask = mask
@@ -77,6 +84,7 @@ class Tracker(object):
         self.rng_seed = rng_seed
         self.track_forward_only = track_forward_only
         self.skip = skip
+        self.finalize_streamlines = finalize_streamlines
 
         # Everything scilpy.tracking is in 'corner', 'voxmm'
         self.origin = 'corner'
@@ -275,7 +283,7 @@ class Tracker(object):
         if tracking_info == PropagationStatus.ERROR:
             # No good tracking direction can be found at seeding position.
             return None
-        line = self._propagate_line(line, tracking_info)
+        line = self._propagate_line(line, True, tracking_info)
 
         # Backward
         if not self.track_forward_only:
@@ -284,14 +292,14 @@ class Tracker(object):
 
             tracking_info = self.propagator.prepare_backward(line,
                                                              tracking_info)
-            line = self._propagate_line(line, tracking_info)
+            line = self._propagate_line(line, False, tracking_info)
 
         # Clean streamline
         if self.min_nbr_pts <= len(line) <= self.max_nbr_pts:
             return line
         return None
 
-    def _propagate_line(self, line, tracking_info):
+    def _propagate_line(self, line, is_forward, tracking_info):
         """
         Generate a streamline in forward or backward direction from an initial
         position following the tracking parameters.
@@ -305,6 +313,8 @@ class Tracker(object):
         ----------
         line: List
             Beginning of the line to propagate.
+        is_forward: bool
+            True if forward propagating, False if backward propagating.
         tracking_info: Any
             Information necessary to know how to propagate. Type: as understood
             by the propagator. Example, with the typical fODF propagator: the
@@ -319,7 +329,20 @@ class Tracker(object):
         """
         invalid_direction_count = 0
         propagation_can_continue = True
-        while len(line) < self.max_nbr_pts and propagation_can_continue:
+        if self.track_forward_only:
+            max_nbr_pts = self.max_nbr_pts
+        elif is_forward:
+            max_nbr_pts = self.max_nbr_pts // 2
+            # -1 for extra step from finalize_streamline
+            if self.finalize_streamlines:
+                max_nbr_pts -= 1
+        else:  # backward
+            max_nbr_pts = self.max_nbr_pts
+            # -1 to account for extra step from finalize_streamline
+            if self.finalize_streamlines:
+                max_nbr_pts -= 1
+
+        while len(line) < max_nbr_pts and propagation_can_continue:
             new_pos, new_tracking_info, is_direction_valid = \
                 self.propagator.propagate(line[-1], tracking_info)
 
@@ -358,3 +381,28 @@ class Tracker(object):
             return False
 
         return True
+
+    def clean_streamlines(self, streamlines, seeds=None):
+        """
+        Remove streamlines that are too short or too long.
+
+        Parameters
+        ----------
+        streamlines: list of list of 3D positions
+            The streamlines to clean.
+
+        Returns
+        -------
+        streamlines: list of list of 3D positions
+            The cleaned streamlines.
+        """
+        cleaned_streamlines = []
+        cleaned_seeds = []
+
+        for i, line in enumerate(streamlines):
+            if self.min_nbr_pts <= len(line) <= self.max_nbr_pts:
+                cleaned_streamlines.append(line)
+                if seeds is not None:
+                    cleaned_seeds.append(seeds[i])
+
+        return cleaned_streamlines, cleaned_seeds
