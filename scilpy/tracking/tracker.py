@@ -25,7 +25,7 @@ class Tracker(object):
                  max_nbr_pts, max_invalid_dirs, compression_th=0.1,
                  nbr_processes=1, save_seeds=False, mmap_mode=None,
                  rng_seed=1234, track_forward_only=False, skip=0,
-                 return_all=False, finalize_streamlines=True):
+                 finalize_streamlines=True):
         """
         Parameters
         ----------
@@ -64,9 +64,6 @@ class Tracker(object):
             tractogram with a fixed rng_seed. Ex: If tractogram_1 was created
             with nbr_seeds=1,000,000, you can create tractogram_2 with
             skip 1,000,000.
-        return_all: bool
-            If true, return all streamlines without discarding the ones that
-            are too short or too long.
         finalize_streamlines: bool
             If True, an additional step is performed to finalize streamlines
             by calling propagator.finalize_streamline().
@@ -359,12 +356,14 @@ class Tracker(object):
             tracking_info = new_tracking_info
 
         # Possible last step.
-        final_pos = self.propagator.finalize_streamline(line[-1],
-                                                        tracking_info)
-        if (final_pos is not None and
-                not np.array_equal(final_pos, line[-1]) and
-                self.mask.is_voxmm_in_bound(*final_pos, origin=self.origin)):
-            line.append(final_pos)
+        if self.finalize_streamlines:
+            final_pos = self.propagator.finalize_streamline(line[-1],
+                                                            tracking_info)
+            if (final_pos is not None and
+                    not np.array_equal(final_pos, line[-1]) and
+                    self.mask.is_voxmm_in_bound(*final_pos, self.origin)):
+                line.append(final_pos)
+
         return line
 
     def _verify_stopping_criteria(self, invalid_direction_count, last_pos):
