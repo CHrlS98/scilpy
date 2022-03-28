@@ -90,6 +90,10 @@ def _build_arg_parser():
                          choices=['nearest', 'trilinear'],
                          help="Mask interpolation: nearest-neighbor or "
                               "trilinear. [%(default)s]")
+    track_g.add_argument('--disable_finalize_streamline', action='store_true',
+                         dest='finalize_strl_off',
+                         help='If set, the finalize_streamline method of '
+                              'the propagator is not called.')
 
     add_seeding_options(p)
 
@@ -182,7 +186,8 @@ def main():
                       save_seeds=args.save_seeds,
                       mmap_mode='r+', rng_seed=args.rng_seed,
                       track_forward_only=args.forward_only,
-                      skip=args.skip)
+                      skip=args.skip,
+                      finalize_streamlines=(not args.finalize_strl_off))
 
     start = time.time()
     logging.debug("Tracking...")
