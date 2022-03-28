@@ -64,7 +64,7 @@ def main():
     labels_per_strl = np.full((len(streamlines), 1), np.NaN)
     reverse_strl_label = np.full((len(streamlines), 1), np.NaN)
     for idx, s in enumerate(streamlines):
-        if len(s) < 40:
+        if len(s) < 2:  # skip degenerate streamlines
             continue
 
         labels_per_strl[idx] =\

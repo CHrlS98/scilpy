@@ -330,7 +330,7 @@ class Tracker(object):
             max_nbr_pts = self.max_nbr_pts
         elif is_forward:
             max_nbr_pts = self.max_nbr_pts // 2
-            # -1 for extra step from finalize_streamline
+            # -1 to account for extra step from finalize_streamline
             if self.finalize_streamlines:
                 max_nbr_pts -= 1
         else:  # backward
