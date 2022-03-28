@@ -16,14 +16,12 @@ As in scil_compute_local_tracking:
     aligned to the previous direction.
     - Algo 'prob': a direction drawn from the empirical distribution function
     defined from the SF.
-    - Algo 'eudx' is not yet available!
 
 Contrary to scil_compute_local_tracking:
     - Input nifti files do not necessarily need to be in isotropic resolution.
-
-References: [1] Girard, G., Whittingstall K., Deriche, R., and
-            Descoteaux, M. (2014). Towards quantitative connectivity analysis:
-            reducing tractography biases. Neuroimage, 98, 266-278.
+    - Runge-Kutta integration is available for the step function.
+    - Nearest neighbor interpolation is available for interpolating ODFs.
+    - Algo 'eudx' is not available.
 """
 import argparse
 import logging
