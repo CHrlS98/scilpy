@@ -12,8 +12,6 @@ As in scil_compute_local_tracking:
 
     The tracking direction is chosen in the aperture cone defined by the
     previous tracking direction and the angular constraint.
-    - Algo 'det': the maxima of the spherical function (SF) the most closely
-    aligned to the previous direction.
     - Algo 'prob': a direction drawn from the empirical distribution function
     defined from the SF.
 
@@ -26,6 +24,7 @@ Contrary to scil_compute_local_tracking:
 import argparse
 import logging
 import math
+from random import seed
 import time
 
 import dipy.core.geometry as gm
@@ -42,8 +41,8 @@ from scilpy.io.utils import (add_processes_arg, add_sphere_arg,
                              assert_inputs_exist, assert_outputs_exist,
                              verify_compression_th)
 from scilpy.image.datasets import DataVolume
-from scilpy.tracking.propagator import ODFPropagator
-from scilpy.tracking.seed import SeedGenerator
+from scilpy.tracking.propagator import ODFPropagatorMomentum
+from scilpy.tracking.seed import DIPYSeedGenerator
 from scilpy.tracking.tools import get_theta
 from scilpy.tracking.tracker import Tracker
 from scilpy.tracking.utils import (add_mandatory_options_tracking,
@@ -61,20 +60,11 @@ def _build_arg_parser():
     add_mandatory_options_tracking(p)
 
     track_g = add_tracking_options(p)
-    track_g.add_argument('--algo', default='prob',
-                         choices=['det', 'prob'],
-                         help='Algorithm to use [%(default)s]')
     add_sphere_arg(track_g, symmetric_only=False)
     track_g.add_argument('--sfthres_init', metavar='sf_th', type=float,
                          default=0.5, dest='sf_threshold_init',
                          help="Spherical function relative threshold value "
                               "for the \ninitial direction. [%(default)s]")
-    track_g.add_argument('--rk_order', metavar="K", type=int, default=2,
-                         choices=[1, 2, 4],
-                         help="The order of the Runge-Kutta integration used "
-                              "for the \nstep function [%(default)s]. As a "
-                              "rule of thumb, doubling the rk_order \nwill "
-                              "double the computation time in the worst case.")
     track_g.add_argument('--max_invalid_length', metavar='MAX', type=float,
                          default=1,
                          help="Maximum length without valid direction, in mm. "
@@ -119,6 +109,36 @@ def _build_arg_parser():
     return p
 
 
+def init_seed_generator(parser, args, generator_class):
+    seed_img = nib.load(args.in_seed)
+    seed_data = seed_img.get_fdata(caching='unchanged', dtype=float)
+    seed_res = seed_img.header.get_zooms()[:3]
+    if generator_class == DIPYSeedGenerator:
+        if args.skip > 0:
+            logging.warning('Skip is not supported with DIPY seed generator.'
+                            'Setting back to 0.')
+            args.skip = 0
+
+        if args.npv:
+            nb_seeds = args.npv
+            seed_per_vox = True
+        elif args.nt:
+            nb_seeds = args.nt
+            seed_per_vox = False
+        else:
+            nb_seeds = 1
+            seed_per_vox = True
+
+        seed_gen = generator_class(seed_data, seed_res, nb_seeds,
+                                   seed_per_vox, args.rng_seed)
+        nb_seeds = len(seed_gen.seeds)
+
+    if nb_seeds == 0:
+        parser.error('Seed mask "{}" does not have any voxel with value > 0.'
+                     .format(args.in_seed))
+    return seed_gen, nb_seeds
+
+
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -138,26 +158,16 @@ def main():
     verify_compression_th(args.compress)
     verify_seed_options(parser, args)
 
-    theta = gm.math.radians(get_theta(args.theta, args.algo))
+    theta = gm.math.radians(get_theta(args.theta, 'prob'))
 
     max_nbr_pts = int(args.max_length / args.step_size) + 1
     min_nbr_pts = int(args.min_length / args.step_size) + 1
     max_invalid_dirs = int(math.ceil(args.max_invalid_length / args.step_size))
 
     logging.debug("Loading seeding mask.")
-    seed_img = nib.load(args.in_seed)
-    seed_data = seed_img.get_fdata(caching='unchanged', dtype=float)
-    seed_res = seed_img.header.get_zooms()[:3]
-    seed_generator = SeedGenerator(seed_data, seed_res)
-    if args.npv:
-        # toDo. This will not really produce n seeds per voxel, only true
-        #  in average.
-        nbr_seeds = len(seed_generator.seeds) * args.npv
-    elif args.nt:
-        nbr_seeds = args.nt
-    else:
-        # Setting npv = 1.
-        nbr_seeds = len(seed_generator.seeds)
+    seed_generator, nbr_seeds =\
+        init_seed_generator(parser, args, DIPYSeedGenerator)
+
     if len(seed_generator.seeds) == 0:
         parser.error('Seed mask "{}" does not have any voxel with value > 0.'
                      .format(args.in_seed))
@@ -175,9 +185,10 @@ def main():
     dataset = DataVolume(odf_sh_data, odf_sh_res, args.sh_interp)
 
     logging.debug("Instantiating propagator.")
-    propagator = ODFPropagator(
-        dataset, args.step_size, args.rk_order, args.algo, args.sh_basis,
-        args.sf_threshold, args.sf_threshold_init, theta, args.sphere)
+    propagator =\
+        ODFPropagatorMomentum(dataset, args.step_size, args.sh_basis,
+                              args.sf_threshold, args.sf_threshold_init,
+                              theta, args.sphere)
 
     logging.debug("Instantiating tracker.")
     tracker = Tracker(propagator, mask, seed_generator, nbr_seeds, min_nbr_pts,

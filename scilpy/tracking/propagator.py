@@ -530,3 +530,109 @@ class ODFPropagator(PropagatorOnSphere):
             if 0 < sf[i] == np.max(sf[self.maxima_neighbours[i]]):
                 maxima.append(self.dirs[i])
         return maxima
+
+
+class ODFPropagatorMomentum(ODFPropagator):
+    """
+    Propagator for ODF tracking.
+
+    Algo is always probabilistic for now.
+    rk_order is always 1.
+    """
+    def __init__(self, dataset, step_size, basis,
+                 sf_threshold, sf_threshold_init,
+                 theta, dipy_sphere='symmetric724',
+                 min_separation_angle=np.pi / 16.):
+        # TODO: equation for radius of curvature : step_size / 2 / sin(theta/2)
+        super(ODFPropagatorMomentum, self).__init__(
+            dataset, step_size, 1, 'prob', basis, sf_threshold,
+            sf_threshold_init, theta, dipy_sphere, min_separation_angle)
+
+        # von-Mises Fisher distribution initial concentration gives equal
+        # probability to all directions.
+        self.kappa = 10.0
+
+        # Decay of exponential moving average.
+        self.beta = 0.4
+
+        # Sharpness of cosine distance.
+        self.alpha = 50.0
+
+        self.probe_dist = 5.0  # mm
+
+        self.trace = []
+
+    def _sample_next_direction(self, pos, v_in):
+        # Tracking field returns the sf and directions
+        kappa_mult = self._get_sharpening_from_probe(pos, v_in)
+
+        sf, directions = self._get_possible_next_dirs_prob(pos, v_in)
+        weights = self._compute_vmf_weights(directions, v_in, kappa_mult)
+
+        sf *= weights
+
+        # Sampling one direction based on updated weigths.
+        v_out = None
+        if np.sum(sf) > 0:
+            v_out = directions[sample_distribution(sf)]
+
+        return v_out
+
+    def _get_sharpening_from_probe(self, pos, v_in):
+        # probe the ODF at probe_dist from pos in direction v_in.
+        sf, dirs = self._get_possible_next_dirs_prob(pos + self.probe_dist
+                                                     * np.asarray(v_in), v_in)
+
+        w = 0.0  # default sharpening of 0.0
+        if np.sum(sf) > 0:
+            # expected direction at probed position, normalized.
+            dirs_array = np.array([dirs[i] for i in range(len(dirs))])\
+                .reshape((-1, 3))
+            sf_array = np.array(sf).reshape((-1, 1))
+            expected_dir = np.sum(sf_array * dirs_array, axis=0)
+            expected_dir /= np.linalg.norm(expected_dir)
+
+            # sharpening factor.
+            w = np.dot(expected_dir, np.asarray(v_in)).squeeze()
+            if w < 0.0:
+                w = 0.0
+            w = w**self.alpha
+
+        # print(w)
+        return w
+
+    def _compute_vmf_weights(self, dirs, v_in, kappa_mult):
+        """
+        Compute the weights for a von-Mises Fisher distribution.
+
+        Parameters
+        ----------
+        dirs: ndarray (N,3)
+            Directions to compute weights for.
+        v_in: ndarray (3,)
+            Incoming direction (center of vMF distribution).
+
+        Returns
+        -------
+        weights: ndarray (N,)
+            Weights for each direction.
+        """
+        dirs_array = np.array([dirs[i]
+                              for i in range(len(dirs))]).reshape((-1, 3))
+        weights = np.exp(self.kappa * kappa_mult * dirs_array.dot(v_in))
+        weights = weights * len(dirs) / np.sum(weights)
+        return weights.reshape((-1, 1))
+
+    def prepare_forward(self, seeding_pos):
+        """
+        TODO: Needs to be updated to return tracking info
+        used for updating kappa.
+        """
+        return super().prepare_forward(seeding_pos)
+
+    def prepare_backward(self, line, forward_dir):
+        """
+        TODO: Needs to be updated to refresh the information
+        for momentum and all.
+        """
+        return super().prepare_backward(line, forward_dir)

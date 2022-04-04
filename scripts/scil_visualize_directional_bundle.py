@@ -15,7 +15,7 @@ from scilpy.io.utils import (add_overwrite_arg, add_reference_arg,
 from dipy.data import get_sphere
 from dipy.io.stateful_tractogram import StatefulTractogram
 from dipy.io.streamline import save_tractogram
-
+from sklearn.decomposition import PCA
 from fury import window, actor
 
 
@@ -32,18 +32,90 @@ def _build_arg_parser():
     return p
 
 
-def _gen_label(vox_id, vshape, sph_id):
-    return sph_id * np.prod(vshape) +\
-        vox_id[2] * np.prod(vshape[:2]) +\
-        vox_id[1] * vshape[0] +\
-        vox_id[0]
+def compute_main_axes(strl_arr):
+    """
+    Compute the main axes of the streamlines array.
+    """
+    point_cloud = np.reshape(strl_arr, (-1, 3))
+    pca = PCA()
+    pca.fit(point_cloud)
+    main_axes = pca.components_
+    return main_axes
 
 
-def _label_streamline(start_dir, start_pos, vshape, sphere):
-    start_dir /= np.linalg.norm(start_dir)
-    strl_vox = start_pos.astype(int)
-    sdir_bin = sphere.find_closest(start_dir)
-    return _gen_label(strl_vox, vshape, sdir_bin)
+def compute_forward_dir_per_streamline(seeds, strl_arr):
+    seed_idx = []
+    for i, seed_pos in enumerate(seeds):
+        idx = np.sum(np.abs(strl_arr[i] - seed_pos), axis=-1).argmin()
+        seed_idx.append(idx)
+
+    forward_dir =\
+        strl_arr[np.arange(len(strl_arr)), np.asarray(seed_idx) + 1, :] -\
+        strl_arr[np.arange(len(strl_arr)), seed_idx, :]
+    return forward_dir
+
+
+def compute_mean_streamline_per_seed(sft):
+    """
+    Compute the mean trajectory per seed.
+    """
+    seeds = sft.data_per_streamline['seeds']
+    strl_arr = np.array([s for s in sft.streamlines])
+    forward_dir = compute_forward_dir_per_streamline(seeds, strl_arr)
+
+    seed_vox = (seeds + 0.5).astype(int)
+
+    mean_streamlines = []
+    main_axes_list = []
+    vox_centers_list = []
+    for vox in np.unique(seed_vox, axis=0):
+        submask = np.all(seed_vox == vox, axis=1)
+        subarr = strl_arr[submask]
+        subdirs = forward_dir[submask]
+        print(vox)
+        print(subarr.shape)
+        print(subdirs.shape)
+
+        main_axes = compute_main_axes(subarr)
+        main_axes_list.append(main_axes)
+        vox_centers_list.append([vox, vox, vox])
+
+        cos_theta = np.stack((np.abs(main_axes[0].dot(subdirs.T)),
+                              np.abs(main_axes[1].dot(subdirs.T)),
+                              np.abs(main_axes[2].dot(subdirs.T))), axis=1)
+
+        # the main axis along which each streamline is best aligned
+        best_align = np.argmax(cos_theta, axis=1)
+        for i in range(3):
+            mask = subdirs[best_align == i].dot(main_axes[i]) < 0.0
+            subsubarr = subarr[best_align == i]
+            if np.count_nonzero(mask) > 0:
+                subsubarr[mask] =\
+                    subsubarr[mask][np.arange(np.count_nonzero(mask)), ::-1]
+                mean_streamlines.append(np.mean(subsubarr, axis=0))
+
+    return mean_streamlines, main_axes_list, vox_centers_list
+
+
+def distance(s, t):
+    """
+    Compute the distance between two equal length streamlines.
+    """
+    assert s.shape == t.shape, "s and t must have the same shape"
+    dist = min(1.0/len(s)*np.sum(np.sqrt(np.sum((s - t)**2, axis=-1))),
+               1.0/len(s)*np.sum(np.sqrt(np.sum((s - t[::-1])**2, axis=-1))))
+    return dist
+
+
+def kmeans_for_matrices(streamlines, nb_clusters=3):
+    """
+    Perform kmeans in streamlines space.
+    """
+    cluster_id = np.random.randint(nb_clusters, size=len(streamlines))
+    for i in range(nb_clusters):
+        mask = cluster_id == i
+        if np.count_nonzero(mask) > 0:
+            s_in_cluster = streamlines[mask]
 
 
 def main():
@@ -51,29 +123,29 @@ def main():
     args = parser.parse_args()
 
     assert_inputs_exist(parser, [args.in_tractogram])
-
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
-    vshape = sft.dimensions
+    sft.to_center()
+    sft.to_vox()
 
-    labels = sft.data_per_streamline['labels']
-    reverse_labels = sft.data_per_streamline['reverse_labels']
-    union_labels = np.append(labels, reverse_labels)
+    kmeans_for_matrices(sft.streamlines)
 
-    union_labels = union_labels[np.logical_not(np.isnan(union_labels))]\
-        .astype(int)
-    print(np.min(union_labels), np.max(union_labels))
+    # seeds are in vox space with origin center
+    seeds = sft.data_per_streamline['seeds']
 
-    hist = np.bincount(union_labels)
-    print(np.argmax(hist), np.max(hist))
+    mean_strl, main_axes, vox_centers = compute_mean_streamline_per_seed(sft)
 
-    idx_mask = np.logical_or(labels == np.argmax(hist),
-                             reverse_labels == np.argmax(hist))
-
-    strl = sft.streamlines[idx_mask.squeeze()]
-    line_actor = actor.line(strl)
-    s = window.Scene()
-    s.add(line_actor)
-    window.show(s)
+    scene = window.Scene()
+    scene.add(actor.line(mean_strl, colors=(1, 1, 1), linewidth=6.0))
+    line_actor = actor.line(sft.streamlines, linewidth=2.0, opacity=0.2)
+    seed_actor = actor.dots(seeds, color=(1, 1, 1))
+    colors = np.tile([[1, 0, 0], [0, 1, 0], [0, 0, 1]], len(main_axes)).reshape((-1, 3))
+    axes_actor = actor.arrow(np.asarray(vox_centers).reshape((-1, 3)),
+                             np.asarray(main_axes).reshape((-1, 3)),
+                             colors)
+    scene.add(line_actor)
+    scene.add(seed_actor)
+    scene.add(axes_actor)
+    window.show(scene)
 
 
 if __name__ == "__main__":

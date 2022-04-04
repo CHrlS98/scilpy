@@ -113,7 +113,7 @@ class Tracker(object):
             streamline.
         """
         if self.nbr_processes < 2:
-            chunk_id = 1
+            chunk_id = 0
             lines, seeds = self._get_streamlines(chunk_id)
         else:
             # Each process will use get_streamlines_at_seeds
@@ -328,7 +328,7 @@ class Tracker(object):
         propagation_can_continue = True
         if self.track_forward_only:
             max_nbr_pts = self.max_nbr_pts
-        elif is_forward:
+        elif is_forward:  # maybe a problem for non-centered seeds
             max_nbr_pts = self.max_nbr_pts // 2
             # -1 to account for extra step from finalize_streamline
             if self.finalize_streamlines:
@@ -380,28 +380,3 @@ class Tracker(object):
             return False
 
         return True
-
-    def clean_streamlines(self, streamlines, seeds=None):
-        """
-        Remove streamlines that are too short or too long.
-
-        Parameters
-        ----------
-        streamlines: list of list of 3D positions
-            The streamlines to clean.
-
-        Returns
-        -------
-        streamlines: list of list of 3D positions
-            The cleaned streamlines.
-        """
-        cleaned_streamlines = []
-        cleaned_seeds = []
-
-        for i, line in enumerate(streamlines):
-            if self.min_nbr_pts <= len(line) <= self.max_nbr_pts:
-                cleaned_streamlines.append(line)
-                if seeds is not None:
-                    cleaned_seeds.append(seeds[i])
-
-        return cleaned_streamlines, cleaned_seeds

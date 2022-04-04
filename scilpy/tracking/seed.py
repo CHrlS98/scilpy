@@ -38,7 +38,7 @@ class SeedGenerator(object):
         self.seeds = np.array(np.where(np.squeeze(data) > 0),
                               dtype=float).transpose()
         if len(self.seeds) == 0:
-            logging.warning("There are positive voxels in the seeding mask!")
+            logging.warning("There are 0 positive voxels in the seeding mask!")
 
     def get_next_pos(self, random_generator, indices, which_seed):
         """
@@ -143,18 +143,20 @@ class DIPYSeedGenerator(object):
         self.origin = 'corner'
         self.space = 'voxmm'
 
+        self.voxres = voxres
+
         # Transforms voxel space with origin center to voxmm space
         # with origin corner.
-        affine = np.array([[voxres[0], 0.0, 0.0, 0.5],
-                           [0.0, voxres[1], 0.0, 0.5],
-                           [0.0, 0.0, voxres[2], 0.5],
+        affine = np.array([[voxres[0], 0.0, 0.0, voxres[0]/2],
+                           [0.0, voxres[1], 0.0, voxres[1]/2],
+                           [0.0, 0.0, voxres[2], voxres[2]/2],
                            [0.0, 0.0, 0.0, 1.0]])
 
         # pre-allocated seeds for tracking, in voxmm space, origin corner
         self.seeds = track_utils.random_seeds_from_mask(
             data, affine, nb_seeds, seed_per_vox, random_seed)
 
-    def get_next_pos(self, random_generator, indices, which_seed):
+    def get_next_pos(self, unused_arg0, unused_arg1, which_seed):
         """
         Generate the next seed position (Space=voxmm, origin=corner).
 
@@ -176,21 +178,9 @@ class DIPYSeedGenerator(object):
         if len_seeds == 0:
             return []
 
-        voxel_dim = np.asarray(self.voxres)
+        return tuple(self.seeds[which_seed])
 
-        # Voxel selection from the seeding mask
-        ind = which_seed % len_seeds
-        x, y, z = self.seeds[indices[ind]]
-
-        # Subvoxel initial positioning
-        r_x = random_generator.uniform(0, voxel_dim[0])
-        r_y = random_generator.uniform(0, voxel_dim[1])
-        r_z = random_generator.uniform(0, voxel_dim[2])
-
-        return x * self.voxres[0] + r_x, y * self.voxres[1] \
-            + r_y, z * self.voxres[2] + r_z
-
-    def init_generator(self, random_initial_value, first_seed_of_chunk):
+    def init_generator(self, unused_arg0, unused_arg1):
         """
         Initialize numpy number generator according to user's parameter
         and indexes from the seeding map.
@@ -209,24 +199,5 @@ class DIPYSeedGenerator(object):
         indices : List
             Indices of current seeding map.
         """
-        random_generator = np.random.RandomState(random_initial_value)
 
-        # 1. Initializing seeding maps indices (shuffling in-place)
-        indices = np.arange(len(self.seeds))
-        random_generator.shuffle(indices)
-
-        # 2. Initializing the random generator
-        # For reproducibility through multi-processing, skipping random numbers
-        # (by producing rand numbers without using them) until reaching this
-        # process (i.e this chunk)'s set of random numbers. Producing only
-        # 100000 at the time to prevent RAM overuse.
-        # (Multiplying by 3 for x,y,z)
-        random_numbers_to_skip = first_seed_of_chunk * 3
-        # toDo: see if 100000 is ok, and if we can create something not
-        #  hard-coded
-        while random_numbers_to_skip > 100000:
-            random_generator.random_sample(100000)
-            random_numbers_to_skip -= 100000
-        random_generator.random_sample(random_numbers_to_skip)
-
-        return random_generator, indices
+        return None, None
