@@ -36,14 +36,9 @@ def track_short_tracks(in_odf, in_seed, in_mask,
         Minimum length of a streamline in voxel space.
     max_length : float, optional
         Maximum length of a streamline in voxel space.
-<<<<<<< HEAD
-    theta : float, optional
-        Maximum angle (degrees) between 2 steps.
-=======
     theta : float or list of float, optional
         Maximum angle (degrees) between 2 steps. If a list, a theta
         is randomly drawn from the list for each streamline.
->>>>>>> short-tracks-gpu
     sharpness : float, optional
         Exponent on ODF amplitude to control sharpness.
     batch_size : int, optional
