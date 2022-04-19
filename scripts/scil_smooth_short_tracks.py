@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import argparse
-from more_itertools import windowed_complete
 import numpy as np
 from scipy.spatial import KDTree
 
@@ -45,7 +44,6 @@ def unravel_irregular_grid(indices, num_pts_per_strl):
 def track(smooth_strl, kd_tree, search_radius, step_size,
           max_angle_cos, streamlines, num_pts_per_strl):
     curr_pos = smooth_strl[-1]
-    neigh_list = []
     while True:
         neighbours = kd_tree.query_ball_point(curr_pos, search_radius)
 
@@ -145,9 +143,8 @@ def main():
         seed_count_per_voxel=seed_per_vox,
         random_seed=args.rng_seed)
 
-    smooth_strl, seeds =\
-        generate_smooth_tracks(strl, seeds, vox_search_radius,
-                               vox_step_size, max_angle)
+    smooth_strl, seeds = generate_smooth_tracks(strl, seeds, vox_search_radius,
+                                                vox_step_size, max_angle)
 
     # save the smoothed streamlines
     out_sft = StatefulTractogram.from_sft(smooth_strl, sft)
