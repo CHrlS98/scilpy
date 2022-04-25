@@ -43,10 +43,10 @@ def _build_arg_parser():
                    help='Path of the bundle file.')
     p.add_argument('in_bingham',
                    help='Path of the Bingham volume.')
-    p.add_argument('in_lobe_metric',
+    p.add_argument('in_lobe_metric', nargs='+',
                    help='Path of the lobe-specific metric (FD, FS, or FF)'
                         ' volume.')
-    p.add_argument('out_mean_map',
+    p.add_argument('out_mean_map', nargs='+',
                    help='Path of the output mean map.')
 
     p.add_argument('--length_weighting', action='store_true',
@@ -66,28 +66,41 @@ def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
 
-    assert_inputs_exist(parser, [args.in_bundle,
-                                 args.in_bingham,
-                                 args.in_lobe_metric])
-    assert_outputs_exist(parser, args, [args.out_mean_map])
+    varlen_args = args.in_lobe_metric + args.out_mean_map
+    num_maps = len(varlen_args)
+    if num_maps % 2 != 0:
+        raise ValueError('Number of input and outputs must match!')
+
+    num_outputs = num_maps // 2
+    args.in_lobe_metric = varlen_args[:num_outputs]
+    args.out_mean_map = varlen_args[num_outputs:]
+
+    assert_inputs_exist(parser,
+                        [args.in_bundle, args.in_bingham] +
+                        args.in_lobe_metric)
+    assert_outputs_exist(parser, args, args.out_mean_map)
 
     sft = load_tractogram_with_reference(parser, args, args.in_bundle)
     bingham_img = nib.load(args.in_bingham)
-    metric_img = nib.load(args.in_lobe_metric)
 
-    if bingham_img.shape[-2] != metric_img.shape[-1]:
-        parser.error('Dimension mismatch between Bingham coefficients '
-                     'and lobe-specific metric image.')
+    metric_img = [nib.load(fname).get_fdata() for fname
+                  in args.in_lobe_metric]
 
-    metric_mean_map =\
+    for img in metric_img:
+        if bingham_img.shape[-2] != img.shape[-1]:
+            parser.error('Dimension mismatch between Bingham coefficients '
+                         'and lobe-specific metric image.')
+
+    metric_mean_map_list =\
         lobe_specific_metric_map_along_streamlines(sft,
                                                    bingham_img.get_fdata(),
-                                                   metric_img.get_fdata(),
+                                                   metric_img,
                                                    args.max_theta,
                                                    args.length_weighting)
-
-    nib.Nifti1Image(metric_mean_map.astype(np.float32),
-                    bingham_img.affine).to_filename(args.out_mean_map)
+    for out_map, metric_mean_map in zip(args.out_mean_map,
+                                        metric_mean_map_list):
+        nib.Nifti1Image(metric_mean_map.astype(np.float32),
+                        bingham_img.affine).to_filename(out_map)
 
 
 if __name__ == '__main__':

@@ -19,8 +19,8 @@ def lobe_specific_metric_map_along_streamlines(sft, bingham_coeffs,
     bingham_coeffs : ndarray
         Array of shape (X, Y, Z, N_LOBES, NB_PARAMS) containing
         the Bingham distributions parameters.
-    metric : ndarray
-        Array of shape (X, Y, Z) containing the lobe-specific
+    metric : ndarray or list
+        Array of shape (X, Y, Z, N_LOBES) containing the lobe-specific
         metric of interest.
     max_theta : float
         Maximum angle in degrees between the fiber direction and the
@@ -29,19 +29,19 @@ def lobe_specific_metric_map_along_streamlines(sft, bingham_coeffs,
         If True, will weigh the metric values according to segment lengths.
     """
 
-    fd_sum, weights = \
+    metric_sum_list, weights_list = \
         lobe_metric_sum_along_streamlines(sft, bingham_coeffs,
                                           metric, max_theta,
                                           length_weighting)
 
-    non_zeros = np.nonzero(fd_sum)
-    weights_nz = weights[non_zeros]
-    fd_sum[non_zeros] /= weights_nz
+    for metric_sum, weights in zip(metric_sum_list, weights_list):
+        non_zeros = np.nonzero(metric_sum)
+        metric_sum[non_zeros] /= weights[non_zeros]
 
-    return fd_sum
+    return metric_sum_list
 
 
-def lobe_metric_sum_along_streamlines(sft, bingham_coeffs, metric,
+def lobe_metric_sum_along_streamlines(sft, bingham_coeffs, metrics,
                                       max_theta, length_weighting):
     """
     Compute a sum map along a bundle for a given lobe-specific metric.
@@ -52,8 +52,8 @@ def lobe_metric_sum_along_streamlines(sft, bingham_coeffs, metric,
         StatefulTractogram containing the streamlines needed.
     bingham_coeffs : ndarray (X, Y, Z, N_LOBES, NB_PARAMS)
         Bingham distributions parameters volume.
-    metric : ndarray (X, Y, Z)
-        The lobe-specific metric of interest.
+    metric : ndarray (X, Y, Z, N_LOBES) or list
+        The lobe-specific metric(s) of interest.
     max_theta : float
         Maximum angle in degrees between the fiber direction and the
         Bingham peak direction.
@@ -71,8 +71,13 @@ def lobe_metric_sum_along_streamlines(sft, bingham_coeffs, metric,
     sft.to_vox()
     sft.to_corner()
 
-    metric_sum_map = np.zeros(metric.shape[:-1])
-    weight_map = np.zeros(metric.shape[:-1])
+    if isinstance(metrics, np.ndarray):
+        metric_list = [metrics]
+    else:
+        metric_list = metrics
+
+    metric_sum_map = [np.zeros(metric.shape[:-1]) for metric in metric_list]
+    weight_map = [np.zeros(metric.shape[:-1]) for metric in metric_list]
     min_cos_theta = np.cos(np.radians(max_theta))
 
     all_crossed_indices = grid_intersections(sft.streamlines)
@@ -107,11 +112,12 @@ def lobe_metric_sum_along_streamlines(sft, bingham_coeffs, metric,
                                       bingham_peak_dir.T))
 
             metric_val = 0.0
-            if (cos_theta > min_cos_theta).any():
-                lobe_idx = np.argmax(np.squeeze(cos_theta), axis=0)  # (n_segs)
-                metric_val = metric[vox_idx][lobe_idx]
+            for i_metric in range(len(metric_list)):
+                if (cos_theta > min_cos_theta).any():
+                    lobe_idx = np.argmax(np.squeeze(cos_theta), axis=0)
+                    metric_val = metric_list[i_metric][vox_idx][lobe_idx]
 
-            metric_sum_map[vox_idx] += metric_val * norm_weight
-            weight_map[vox_idx] += norm_weight
+                metric_sum_map[i_metric][vox_idx] += metric_val * norm_weight
+                weight_map[i_metric][vox_idx] += norm_weight
 
     return metric_sum_map, weight_map
