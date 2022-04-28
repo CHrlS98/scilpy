@@ -5,3 +5,4 @@ include requirements.txt
 recursive-include scilpy *.c
 recursive-include scilpy *.cpp
 recursive-include scilpy *.pyx
+recursive-include scilpy *.cl
