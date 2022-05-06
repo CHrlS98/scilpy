@@ -92,52 +92,6 @@ def generate_streamline_ids(strl_lengths):
     return ids
 
 
-def create_acceleration_struct(strl_pts, strl_lengths, edge_length):
-    """
-    Create the acceleration structure for GPU usage. Generates a regular grid
-    containing the identifier of all streamlines passing through a cell.
-    """
-    print("START CREATE ACCEL STRUCT")
-    strl_ids = generate_streamline_ids(strl_lengths)
-    strl_int = (strl_pts / edge_length).astype(np.int32)
-    dims = (np.max(strl_int[:, 0]) + 1,
-            np.max(strl_int[:, 1]) + 1,
-            np.max(strl_int[:, 2]) + 1)
-
-    flat_indices = ravel_multi_index(strl_int, dims)
-    cell_ids = np.unique(flat_indices)  # unique keys are sorted
-
-    print("COMPUTE MAX DENSITY")
-    density_map = np.zeros(dims, dtype=np.int32)
-    for cell_id in strl_int:
-        density_map[cell_id[0], cell_id[1], cell_id[2]] += 1
-    max_density = np.max(density_map)
-    print("MAX DENSITY:", max_density)
-
-    strl_dict = {key: np.full((max_density,), -1, dtype=np.int32)
-                 for key in cell_ids}
-    for i, flat_id in enumerate(flat_indices):
-        strl_id = strl_ids[i]
-        curr_ids = strl_dict[flat_id]
-        is_unique = True
-        for curr_id in curr_ids:
-            if curr_id == strl_id:
-                is_unique = False
-                break
-        if is_unique:
-            strl_dict[flat_id][
-                np.count_nonzero(strl_dict[flat_id] >= 0)] = strl_id
-
-    strl_per_cell = []
-    num_strl_per_cell = []
-    for key in cell_ids:
-        strl_in_cell = strl_dict[key]
-        strl_per_cell.append(strl_in_cell)
-        num_strl_per_cell.append(len(strl_in_cell))
-
-    return cell_ids, dims, strl_per_cell, num_strl_per_cell
-
-
 @jit(nopython=True, cache=True)
 def create_accel_struct(strl_pts, strl_lengths, edge_length):
     strl_int = (strl_pts / edge_length).astype(np.int32)
