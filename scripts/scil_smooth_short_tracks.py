@@ -127,6 +127,7 @@ def track(smooth_strl, kd_tree, search_radius, step_size,
         mask = weights > max_angle_cos
 
         # TODO: Replace mean direction by mean trajectory for some distance.
+        # TODO: Investigate effect of weights
         mean_dir = np.sum(all_dirs[mask] * weights[mask][:, None],
                           axis=0)
         dir_norm = np.linalg.norm(mean_dir)
