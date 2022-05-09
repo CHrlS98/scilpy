@@ -4,11 +4,14 @@
 Generate complete streamlines from short-tracks tractogram.
 """
 import argparse
-import psutil
+import inspect
+import scilpy
+import os
 import numpy as np
 from scilpy.io.utils import (assert_inputs_exist, assert_outputs_exist,
                              add_reference_arg, add_overwrite_arg)
 from scilpy.io.streamlines import load_tractogram_with_reference
+import pyopencl as cl
 from numba import jit
 
 
@@ -135,7 +138,7 @@ def create_accel_struct(strl_pts, strl_lengths, edge_length):
             cell_strl_ids[cell_strl_offset + emplace_pos] = strl_id
         offset += length
 
-    return cell_ids, cell_strl_count, cell_strl_offsets, cell_strl_ids
+    return cell_ids, cell_strl_count, cell_strl_offsets, cell_strl_ids, dims
 
 
 def get_cl_code_string(fpath):
@@ -152,7 +155,7 @@ def get_cl_code_string(fpath):
 
 
 def main():
-    p = psutil.Process()
+    # p = psutil.Process()
     parser = _build_arg_parser()
     args = parser.parse_args()
 
@@ -163,41 +166,63 @@ def main():
     sft.to_vox()
     sft.to_corner()
 
-    vox_radius = args.search_radius / sft.voxel_sizes[0]
-    print("Voxel radius:", vox_radius)
+    vox_search_radius = args.search_radius / sft.voxel_sizes[0]
+    edge_length = vox_search_radius
+    max_search_neighbours = int(vox_search_radius / edge_length + 1)**3
 
-    strl_pts = np.concatenate(sft.streamlines, axis=0)
-    min_position = np.min(strl_pts, axis=0)
-    strl_pts -= min_position  # première valeur à (0, 0, 0)
-    strl_lengths = sft.streamlines._lengths
-    strl_offsets = np.append([0], np.cumsum(strl_lengths)[:-1])
+    st_pts = np.concatenate(sft.streamlines, axis=0)
+    min_position = np.min(st_pts, axis=0)
+    st_pts -= min_position  # première valeur à (0, 0, 0) -> bounding box plus tight
+    st_lengths = sft.streamlines._lengths
+    st_offsets = np.append([0], np.cumsum(st_lengths)[:-1])
 
-    cell_ids, cell_strl_count, cell_strl_offsets, cell_strl_ids =\
-        create_accel_struct(strl_pts, strl_lengths, vox_radius)
+    cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids, grid_dims =\
+        create_accel_struct(st_pts, st_lengths, edge_length)
+    seed_pts = np.array([[41.0, 30.0, 1.0]])
 
-    print(p.memory_full_info())
+    # print(p.memory_full_info())
 
     print("Number of bins:", len(cell_ids))
-    print("Max density:", np.max(cell_strl_count))
+    print("Max density:", np.max(cell_st_counts))
 
-    start = cell_strl_offsets[np.argmax(cell_strl_count)]
-    end = start + cell_strl_count[np.argmax(cell_strl_count)]
-    strl = []
-    for id in cell_strl_ids[start:end]:
-        strl.append(sft.streamlines[id])
+    # prepare arrays for gpu
+    cell_ids_asarray = np.asarray(cell_ids, dtype=np.int32)
+    cell_st_counts_asarray = np.asarray(cell_st_counts, dtype=np.int32)
+    cell_st_offsets_asarray = np.asarray(cell_st_offsets, dtype=np.int32)
+    cell_st_ids_asarray = np.asarray(cell_st_ids, dtype=np.int32)
+    st_lengths_asarray = np.asarray(st_lengths, dtype=np.int32)
+    st_offsets_asarray = np.asarray(st_offsets, dtype=np.int32)
+    st_pts_asarray = np.column_stack((st_pts, np.ones(len(st_pts))))\
+        .astype(np.float32)
+    seed_pts_asarray = np.column_stack((seed_pts, np.ones(len(seed_pts))))\
+        .astype(np.float32)
 
-    from fury import window, actor
-    scene = window.Scene()
-    strl_actor = actor.line(strl)
-    scene.add(strl_actor)
+    # output buffer
+    out_tracks = np.zeros((max_search_neighbours, 4), dtype=np.float32)
 
-    window.show(scene)
+    # create context and command queue
+    ctx = cl.create_some_context()
+    queue = cl.CommandQueue(ctx)
 
-    point = np.array([41.0, 30.0, 1.0])
-    # candidate_strl = search_neighbours(point, cell_ids, strl_per_cell,
-    #                                    num_strl_per_cell, grid_dims,
-    #                                    vox_radius)
-    # print(candidate_strl)
+    # copy arrays to device (gpu)
+    cell_ids_dev = cl.array.to_device(queue, cell_ids_asarray)
+    cell_st_counts_dev = cl.array.to_device(queue, cell_st_counts_asarray)
+    cell_st_offsets_dev = cl.array.to_device(queue, cell_st_offsets_asarray)
+    cell_st_ids_dev = cl.array.to_device(queue, cell_st_ids_asarray)
+    st_lengths_dev = cl.array.to_device(queue, st_lengths_asarray)
+    st_offsets_dev = cl.array.to_device(queue, st_offsets_asarray)
+    st_pts_dev = cl.array.to_device(queue, st_pts_asarray)
+    seed_pts_dev = cl.array.to_device(queue, seed_pts_asarray)
+
+    # read CL kernel code
+    module_path = inspect.getfile(scilpy)
+    cl_code_path = os.path.join(os.path.dirname(module_path),
+                                'tracking', 'track_over_tracks.cl')
+    code_str = get_cl_code_string(cl_code_path)
+
+    # add compiler definitions
+
+    print(0)
 
 
 if __name__ == '__main__':

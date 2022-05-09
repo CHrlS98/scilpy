@@ -125,16 +125,16 @@ int search_neighbours(const float4 pos, int* neighbours)
 
 
 int get_valid_trajectories(const float4 current_position, const int num_neighbours, const int* neighbour_cells,
-                          __global const int* cell_ids, __global const int* cell_strl_counts,
-                          __global const int* cell_strl_offsets, __global const int* cell_strl_ids,
-                          __global const int* all_strl_lengths, __global const int* all_strl_offsets,
-                          __global const float4* all_strl_points, int* valid_streamlines)
+                          __global const int* cell_ids, __global const int* cell_st_counts,
+                          __global const int* cell_st_offsets, __global const int* cell_st_ids,
+                          __global const int* all_st_lengths, __global const int* all_st_offsets,
+                          __global const float4* all_st_points, int* valid_st, int* closest_pts)
 {
-    // maximum number of streamlines is MAX_SEARCH_NEIGHBOURS*MAX_DENSITY
-    int unique_streamlines[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
-    int num_unique_strls = 0;
+    // maximum number of short-tracks is MAX_SEARCH_NEIGHBOURS*MAX_DENSITY
+    int unique_st[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
+    int num_unique_st = 0;
 
-    // passer au travers de chaque cellule et ajouter les streamlines ids sans duplicats
+    // passer au travers de chaque cellule et ajouter les short-tracks ids sans duplicats
     for(int n_id = 0; n_id < num_neighbours; ++n_id)
     {
         const int neigh_cell_id = neighbour_cells[n_id];
@@ -142,16 +142,16 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
         if(current_cell_index > -1)
         {
             // this neighbour contains streamlines
-            const int strl_count = cell_strl_counts[current_cell_index];
-            const int strl_offset = cell_strl_offsets[current_cell_index];
+            const int st_count = cell_st_counts[current_cell_index];
+            const int st_offset = cell_st_offsets[current_cell_index];
 
             // iterate through all streamlines in current cell
-            for(int strl_i = strl_offset; strl_i < strl_offset + strl_count; ++strl_i)
+            for(int st_i = st_offset; st_i < st_offset + st_count; ++st_i)
             {
-                const int strl_id = cell_strl_ids[strl_i];
-                if(!contains_unsorted(strl_id, unique_streamlines, num_unique_strls))
+                const int st_id = cell_st_ids[st_i];
+                if(!contains_unsorted(st_id, unique_st, num_unique_st))
                 {
-                    unique_streamlines[num_unique_strls++] = strl_id;
+                    unique_st[num_unique_st++] = st_id;
                 }
             }
         }
@@ -159,58 +159,67 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
 
     // unique_streamlines peuvent être trop loin pour être valides
     // on doit faire le tri en passant à travers chaque streamline.
-    int num_valid_streamlines = 0;
-    for(int i  = 0; i < num_unique_strls; ++i)
+    int num_valid_st = 0;
+    for(int i  = 0; i < num_unique_st; ++i)
     {
-        const int strl_id = unique_streamlines[i];
-        const int strl_length = all_strl_lengths[strl_id];
-        const int strl_offset = all_strl_offsets[strl_id];
+        const int st_id = unique_st[i];
+        const int st_length = all_st_lengths[st_id];
+        const int st_offset = all_st_offsets[st_id];
 
-        bool is_inside_radius = false;
-        for(int point_id = strl_offset;
-            point_id < strl_offset + strl_length && !is_inside_radius;
-            ++point_id)
+        float min_distance = SEARCH_RADIUS + 1.0f;
+        int closest_pt_id = -1;
+        for(int point_id = st_offset; point_id < st_offset + st_length; ++point_id)
         {
             // to be valid, a streamline must have at least
             // one point inside the search_radius
-            const float4 current_strl_point = all_strl_points[point_id];
-            is_inside_radius =
-                distance(current_strl_point.xyz, current_position.xyz) < SEARCH_RADIUS;
+            const float4 current_st_point = all_st_points[point_id];
+            const float dist_to_curr_position = distance(current_st_point.xyz, current_position.xyz);
+            if(dist_to_curr_position < min_distance)
+            {
+                min_distance = dist_to_curr_position;
+                closest_pt_id = point_id;
+            }
         }
-        if(is_inside_radius)
+        if(closest_pt_id >= 0)
         {
-            valid_streamlines[num_valid_streamlines++] = strl_id;
+            valid_st[num_valid_st] = st_id;
+            closest_pts[num_valid_st] = closest_pt_id;
+            ++num_valid_st;
         }
     }
-    return num_valid_streamlines;
+    return num_valid_st;
 }
 
 
 float4 get_next_direction(const float4 current_position, const int num_neighbours, const int* neighbour_cells,
-                          __global const int* cell_ids, __global const int* cell_strl_counts,
-                          __global const int* cell_strl_offsets, __global const int* cell_strl_ids,
-                          __global const int* strl_lengths, __global const int* strl_offsets,
-                          __global const float4* strl_points)
+                          __global const int* cell_ids, __global const int* cell_st_counts,
+                          __global const int* cell_st_offsets, __global const int* cell_st_ids,
+                          __global const int* st_lengths, __global const int* st_offsets,
+                          __global const float4* st_points)
 {
-    int valid_streamlines[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
-    get_valid_trajectories(current_position, num_neighbours, neighbour_cells, cell_ids,
-                           cell_strl_counts, cell_strl_offsets, cell_strl_ids, strl_lengths,
-                           strl_offsets, strl_points, valid_streamlines);
+    int valid_st[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
+    int closest_pts[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
+    const int num_valid_st = get_valid_trajectories(current_position, num_neighbours, neighbour_cells,
+                                                    cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
+                                                    st_lengths, st_offsets, st_points, valid_st, closest_pts);
     // valid_streamlines now contains tous les indices des short-tracks à l'intérieur du search radius
+    for(int i = 0; i < num_valid_st; ++i)
+    {
+        const int valid_st_id = valid_st[i];
+    }
+    return (float4)(0.0f, 0.0f, 0.0f, 0.0f);
 }
 
 
-// TODO: Better naming. Probablement que le output est des
-//       streamlines, mais le input est plutôt des short-tracks.
-//
-// Il faudrait que ce soit moins mêlant.
+// Naming convention: 'st' means 'short-tracks'. Short-tracks are used as input,
+//                    the input is 'tracks' or 'strl' (streamlines)
 __kernel void track_over_tracks(__global const int* cell_ids, // liste des cellules contenant des streamlines
-                                __global const int* cell_strl_counts, // liste du nombre de streamlines contenue dans chaque cellule
-                                __global const int* cell_strl_offsets, // liste du decalage dans le tableau des streamlines ids pour chaque cellule
-                                __global const int* cell_strl_ids, // tableau des index des streamlines contenue dans chaque cellule
-                                __global const int* strl_lengths, // tableau de longueur n_streamlines qui indique le nombre de points de chaque streamline
-                                __global const int* strl_offsets, // tableau de longueur n_streamlines qui indique l'index où commence la n-ieme streamline
-                                __global const float4* strl_points, // tous les points de toutes les streamlines
+                                __global const int* cell_st_counts, // liste du nombre de short-tracks contenue dans chaque cellule
+                                __global const int* cell_st_offsets, // liste du decalage dans le tableau des short-tracks ids pour chaque cellule
+                                __global const int* cell_st_ids, // tableau des index des short-tracks contenue dans chaque cellule
+                                __global const int* all_st_lengths, // tableau de longueur n_short_tracks qui indique le nombre de points de chaque shorttrack
+                                __global const int* all_st_offsets, // tableau de longueur n_short_tracks qui indique l'index où commence la n-ieme shorttrack
+                                __global const float4* all_st_points, // tous les points de toutes les streamlines
                                 __global const float4* seed_points,
                                 __global float4* output_tracks)
 {
@@ -222,4 +231,10 @@ __kernel void track_over_tracks(__global const int* cell_ids, // liste des cellu
     // chaque cell ID est associée à des streamlines qui la traversent.
 
     // tracking loop qui fait des steps dans mon short-tracks field.
+    // pas besoin de mask puisque mes short-tracks ont deja ete filtrees avec
+    // un masque.
+
+    // commencer par tester que je peux retrouver l'ensemble de short-tracks le plus proche d'un certain point
+
+    // short-tracks pourraient etre compressees avec une regression polynomiales
 }
