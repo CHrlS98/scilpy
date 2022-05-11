@@ -233,9 +233,10 @@ bool get_next_direction(const float4 prev_dir, const int num_valid_st,
         }
 
         // deviation angle test
-        if(dot(normalize(dir_i.xyz), prev_dir.xyz) > MIN_COS_ANGLE)
+        const float deviation = dot(normalize(dir_i.xyz), prev_dir.xyz);
+        if(deviation > MIN_COS_ANGLE)
         {
-            next_dir[0].xyz += dir_i.xyz;
+            next_dir[0].xyz += deviation * dir_i.xyz;
             is_valid = true;
         }
     }
@@ -371,6 +372,20 @@ bool get_init_direction(const float4 seed_pos,
 }
 
 
+void reverse_streamline(const int num_strl_points, const size_t global_id,
+                        __global float4* output_tracks)
+{
+    for(int i = 0; i < (int)(num_strl_points/2); ++i)
+    {
+        const size_t head = global_id*MAX_STRL_LEN + i;
+        const size_t tail = global_id*MAX_STRL_LEN+num_strl_points-1-i;
+        const float4 temp_pt = output_tracks[global_id*MAX_STRL_LEN+i];
+        output_tracks[head] = output_tracks[tail];
+        output_tracks[tail] = temp_pt;
+    }
+}
+
+
 // Naming convention: 'st' means 'short-tracks'. Short-tracks are used as input,
 //                    the output is 'tracks' or 'strl' (streamlines)
 __kernel void track_over_tracks(__global const int* cell_ids,
@@ -404,31 +419,25 @@ __kernel void track_over_tracks(__global const int* cell_ids,
         cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
         all_st_lengths, all_st_offsets, all_st_points, output_tracks);
 
-    // test if backward tracking can be done
+    // if the number of point is smaller than MAX_STRL_LEN,
+    // we can perform backward tracking.
     if(num_strl_points < MAX_STRL_LEN)
     {
-        // we start by reversing the streamline
-        for(int i = 0; i < (int)(num_strl_points/2); ++i)
-        {
-            const size_t head = global_id*MAX_STRL_LEN + i;
-            const size_t tail = global_id*MAX_STRL_LEN+num_strl_points-1-i;
-            const float4 temp_pt = output_tracks[global_id*MAX_STRL_LEN+i];
-            output_tracks[head] = output_tracks[tail];
-            output_tracks[tail] = temp_pt;
-        }
-    }
-    // if the forward tracking yielded a streamline,
-    // use it for initial direction in backward tracking
-    if(num_strl_points > 1)
-    {
-        const float4 p0 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-2];
-        const float4 p1 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-1];
-        last_dir[0].xyz = normalize(p1.xyz - p0.xyz);
-    }
+        reverse_streamline(num_strl_points, global_id, output_tracks);
 
-    // backward track
-    propagate_line(
-        num_strl_points, seed_points[global_id], last_dir[0], global_id,
-        cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-        all_st_lengths, all_st_offsets, all_st_points, output_tracks);
+        // if the forward tracking yielded a streamline,
+        // use it for initial direction in backward tracking
+        if(num_strl_points > 1)
+        {
+            const float4 p0 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-2];
+            const float4 p1 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-1];
+            last_dir[0].xyz = normalize(p1.xyz - p0.xyz);
+        }
+
+        // backward track
+        propagate_line(
+            num_strl_points, seed_points[global_id], last_dir[0], global_id,
+            cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
+            all_st_lengths, all_st_offsets, all_st_points, output_tracks);
+    }
 }

@@ -5,22 +5,26 @@ Generate complete streamlines from short-tracks tractogram.
 """
 import argparse
 import inspect
+import logging
 import scilpy
 import os
+from time import perf_counter
+
 import numpy as np
 import nibabel as nib
-from scilpy.io.image import get_data_as_mask
-from scilpy.io.utils import (assert_inputs_exist, assert_outputs_exist,
-                             add_reference_arg, add_overwrite_arg)
-from scilpy.tracking.utils import add_seeding_options
-from scilpy.io.streamlines import load_tractogram_with_reference
+import pyopencl as cl
+
+from pyopencl import array
+from numba import jit
 from dipy.tracking.utils import random_seeds_from_mask
 from dipy.io.stateful_tractogram import StatefulTractogram
 from dipy.io.streamline import save_tractogram
-
-import pyopencl as cl
-from pyopencl import array
-from numba import jit
+from scilpy.io.image import get_data_as_mask
+from scilpy.io.utils import (add_verbose_arg, assert_inputs_exist,
+                             assert_outputs_exist, add_reference_arg,
+                             add_overwrite_arg)
+from scilpy.tracking.utils import add_seeding_options
+from scilpy.io.streamlines import load_tractogram_with_reference
 
 
 def _build_arg_parser():
@@ -57,6 +61,7 @@ def _build_arg_parser():
 
     add_reference_arg(p)
     add_overwrite_arg(p)
+    add_verbose_arg(p)
     return p
 
 
@@ -155,15 +160,22 @@ def create_accel_struct(strl_pts, strl_lengths, edge_length):
 
 
 def main():
+    t_init = perf_counter()
     parser = _build_arg_parser()
     args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
 
     assert_inputs_exist(parser, [args.in_tractogram, args.in_seed])
     assert_outputs_exist(parser, args, [args.out_tractogram])
 
+    t0 = perf_counter()
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
     sft.to_vox()
     sft.to_corner()
+    logging.info('Loaded tractogram containing {0} streamlines in {1:.2}s.'
+                 .format(len(sft.streamlines), perf_counter() - t0))
 
     vox_search_radius = args.search_radius / sft.voxel_sizes[0]
     vox_step_size = args.step_size / sft.voxel_sizes[0]
@@ -182,9 +194,12 @@ def main():
     st_offsets = np.append([0], np.cumsum(st_lengths)[:-1])
 
     # create acceleration structure around streamline points
+    t0 = perf_counter()
     cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids, grid_dims =\
         create_accel_struct(st_pts, st_lengths, edge_length)
     max_density = int(np.max(cell_st_counts))
+    logging.info('Created acceleration structure in {0:.2}s.'
+                 .format(perf_counter() - t0))
 
     # generate seeds
     if args.npv:
@@ -197,6 +212,7 @@ def main():
         nb_seeds = 1
         seed_per_vox = True
 
+    t0 = perf_counter()
     mask = get_data_as_mask(nib.load(args.in_seed))
     seed_pts = random_seeds_from_mask(
         mask, np.eye(4),
@@ -204,6 +220,8 @@ def main():
         seed_count_per_voxel=seed_per_vox,
         random_seed=args.rand)
     seed_pts -= min_position
+    logging.info('Generated {0} seed positions in {1:.2f}s.'
+                 .format(len(seed_pts), perf_counter() - t0))
 
     # prepare arrays for gpu
     cell_ids = np.asarray(cell_ids, dtype=np.int32)
@@ -262,10 +280,12 @@ def main():
         ymax_str + zmax_str + max_strl_len_str + min_cos_angle_str +\
         min_cos_angle_init_str + vox_step_size_str + code_str
 
-    print(f'Launching tracking for {seed_pts_dev.shape[:-1]} seed positions.')
-
     # create program
     program = cl.Program(ctx, code_str).build()
+
+    t0 = perf_counter()
+    logging.info(f'Launching tracking for {seed_pts_dev.shape[:-1]} '
+                 'seed positions.')
     evt = program.track_over_tracks(
         queue, seed_pts_dev.shape[:1], None, cell_ids_dev.data,
         cell_st_counts_dev.data, cell_st_offsets_dev.data,
@@ -273,8 +293,7 @@ def main():
         st_pts_dev.data, seed_pts_dev.data, out_tracks_dev.data)
 
     evt.wait()
-
-    print("Tracking done.")
+    logging.info(f'Tracking finished in {perf_counter() - t0:.2f}s.')
 
     output_tracks = np.asarray(out_tracks_dev.get())
     strl = []
@@ -284,18 +303,13 @@ def main():
         if(len(strl_pts >= min_strl_len)):
             strl.append(strl_pts)
 
-    print('Saving output tractogram.')
     # save output tractogram
+    logging.info('Saving output tractogram.')
     out_sft = StatefulTractogram.from_sft(strl, sft)
     out_sft.remove_invalid_streamlines()
     save_tractogram(out_sft, args.out_tractogram)
 
-    from fury import actor, window
-    s = window.Scene()
-    a_line = actor.line(strl)
-    a_seed = actor.dots(seed_pts[..., :-1] + min_position, color=(1, 1, 1))
-    s.add(a_line, a_seed)
-    window.show(s)
+    logging.info('Total runtime: {:.2f}s.'.format(perf_counter() - t_init))
 
 
 if __name__ == '__main__':
