@@ -10,8 +10,8 @@ NOTES:
 #define NUM_CELLS 0
 #define SEARCH_RADIUS 0.0f
 #define EDGE_LENGTH 0.0f
-#define MAX_DENSITY 0 // maximum number of streamlines per cell
-#define MAX_SEARCH_NEIGHBOURS 0 // 2 *search_radius / edge_length + 1 as type int, to the power of 3
+#define MAX_DENSITY 0
+#define MAX_SEARCH_NEIGHBOURS 0
 #define XMAX 0
 #define YMAX 0
 #define ZMAX 0
@@ -139,7 +139,7 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
     int unique_st[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
     int num_unique_st = 0;
 
-    // passer au travers de chaque cellule et ajouter les short-tracks ids sans duplicats
+    // go through all neighbour cells and add short-track ids, without duplicates
     for(int n_id = 0; n_id < num_neighbours; ++n_id)
     {
         const int neigh_cell_id = neighbour_cells[n_id];
@@ -162,8 +162,9 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
         }
     }
 
-    // unique_streamlines peuvent être trop loin pour être valides
-    // on doit faire le tri en passant à travers chaque streamline.
+    // The candidate short-tracks may be outside the search radius,
+    // so we need to compute the distance between the current position
+    // and each short-tracks.
     int num_valid_st = 0;
     for(int i  = 0; i < num_unique_st; ++i)
     {
@@ -203,7 +204,7 @@ bool get_next_direction(const float4 prev_dir, const int num_valid_st,
                           __global const float4* all_st_points,
                           float4* next_dir)
 {
-    float4 dir_i = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 dir_i;
     next_dir[0] = (float4)(0.0f, 0.0f, 0.0f, 1.0f);
     bool is_valid = false;
     for(int i = 0; i < num_valid_st; ++i)

@@ -174,7 +174,7 @@ def main():
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
     sft.to_vox()
     sft.to_corner()
-    logging.info('Loaded tractogram containing {0} streamlines in {1:.2}s.'
+    logging.info('Loaded tractogram containing {0} streamlines in {1:.2f}s.'
                  .format(len(sft.streamlines), perf_counter() - t0))
 
     vox_search_radius = args.search_radius / sft.voxel_sizes[0]
@@ -198,7 +198,7 @@ def main():
     cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids, grid_dims =\
         create_accel_struct(st_pts, st_lengths, edge_length)
     max_density = int(np.max(cell_st_counts))
-    logging.info('Created acceleration structure in {0:.2}s.'
+    logging.info('Created acceleration structure in {0:.2f}s.'
                  .format(perf_counter() - t0))
 
     # generate seeds
@@ -299,8 +299,9 @@ def main():
     strl = []
     for i in range(seed_pts_dev.shape[0]):
         strl_pts = output_tracks[i*max_strl_len:i*max_strl_len+max_strl_len]
-        strl_pts = strl_pts[strl_pts[..., -1] > 0][..., :-1] + min_position
+        strl_pts = strl_pts[strl_pts[..., -1] > 0]
         if(len(strl_pts >= min_strl_len)):
+            strl_pts = strl_pts[..., :-1] + min_position
             strl.append(strl_pts)
 
     # save output tractogram
