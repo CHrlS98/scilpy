@@ -266,35 +266,45 @@ int propagate_line(int num_strl_points, float4 curr_pos,
     bool propagation_can_continue = true;
     while(num_strl_points < MAX_STRL_LEN && propagation_can_continue)
     {
-        const int num_neighbours = search_neighbours(curr_pos, neighbour_cells);
-        const int num_valid_st = get_valid_trajectories(
-            curr_pos, num_neighbours, neighbour_cells,
-            cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-            all_st_lengths, all_st_offsets, all_st_points, valid_st,
-            closest_pts);
-
-        if(num_valid_st > 0)
+        // First, we must test that we are inside a cell containing
+        // streamlines. If not, it means we are not inside the WM mask.
+        const int curr_pos_cell_id = map_to_cell_id(curr_pos);
+        if(dichotomic_search_cell(curr_pos_cell_id, cell_ids) == -1)
         {
-            float4 next_dir[1];
-            const bool is_valid = get_next_direction(
-                last_dir, num_valid_st, valid_st, closest_pts,
-                all_st_lengths, all_st_offsets, all_st_points, next_dir);
+            propagation_can_continue = false;
+        }
+        else
+        {
+            const int num_neighbours = search_neighbours(curr_pos, neighbour_cells);
+            const int num_valid_st = get_valid_trajectories(
+                curr_pos, num_neighbours, neighbour_cells,
+                cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
+                all_st_lengths, all_st_offsets, all_st_points, valid_st,
+                closest_pts);
 
-            if(is_valid)
+            if(num_valid_st > 0)
             {
-                curr_pos = curr_pos + STEP_SIZE * next_dir[0];
-                last_dir = next_dir[0];
-                output_tracks[global_id*MAX_STRL_LEN+num_strl_points] = curr_pos;
-                ++num_strl_points;
+                float4 next_dir[1];
+                const bool is_valid = get_next_direction(
+                    last_dir, num_valid_st, valid_st, closest_pts,
+                    all_st_lengths, all_st_offsets, all_st_points, next_dir);
+
+                if(is_valid)
+                {
+                    curr_pos = curr_pos + STEP_SIZE * next_dir[0];
+                    last_dir = next_dir[0];
+                    output_tracks[global_id*MAX_STRL_LEN+num_strl_points] = curr_pos;
+                    ++num_strl_points;
+                }
+                else
+                {
+                    propagation_can_continue = false;
+                }
             }
             else
             {
                 propagation_can_continue = false;
             }
-        }
-        else
-        {
-            propagation_can_continue = false;
         }
     }
     return num_strl_points;
