@@ -63,12 +63,22 @@ int dichotomic_search_cell(const int id, __global const int* cell_ids)
 int map_to_cell_id(const float4 point)
 {
     const float4 point_in_cells_space = point / EDGE_LENGTH;
-    const int3 cell_id_3dimensional = {(int)point_in_cells_space.x,
-                                       (int)point_in_cells_space.y,
-                                       (int)point_in_cells_space.z};
-    // ravel 3d index in 1d
-    return cell_id_3dimensional.z * CELLS_GRID_DIMS.y * CELLS_GRID_DIMS.x +
-           cell_id_3dimensional.y * CELLS_GRID_DIMS.x + cell_id_3dimensional.x;
+
+    if(point_in_cells_space.x >= 0.0f && point_in_cells_space.x < (float)CELLS_GRID_DIMS.x
+    && point_in_cells_space.y >= 0.0f && point_in_cells_space.y < (float)CELLS_GRID_DIMS.y
+    && point_in_cells_space.z >= 0.0f && point_in_cells_space.z < (float)CELLS_GRID_DIMS.z)
+    {
+        const int3 cell_id_3dimensional = {(int)point_in_cells_space.x,
+                                        (int)point_in_cells_space.y,
+                                        (int)point_in_cells_space.z};
+
+        // ravel 3d index in 1d
+        return cell_id_3dimensional.z * CELLS_GRID_DIMS.y * CELLS_GRID_DIMS.x +
+            cell_id_3dimensional.y * CELLS_GRID_DIMS.x + cell_id_3dimensional.x;
+    }
+    // if we are outside the cells grid, we are without a doubt outside the trackable
+    // voxels, just return -1
+    return -1;
 }
 
 
@@ -89,14 +99,14 @@ void get_search_boundaries(const float4 center, float2* x_bounds,
                            float2* y_bounds, float2* z_bounds)
 {
     // new position is inside image range
-    x_bounds[0].x = clamp(center.x - SEARCH_RADIUS, 0.0f, (float)CELLS_GRID_DIMS.x);
-    x_bounds[0].y = clamp(center.x + SEARCH_RADIUS, 0.0f, (float)CELLS_GRID_DIMS.x);
+    x_bounds[0].x = center.x - SEARCH_RADIUS;
+    x_bounds[0].y = center.x + SEARCH_RADIUS;
 
-    y_bounds[0].x = clamp(center.y - SEARCH_RADIUS, 0.0f, (float)CELLS_GRID_DIMS.y);
-    y_bounds[0].y = clamp(center.y + SEARCH_RADIUS, 0.0f, (float)CELLS_GRID_DIMS.y);
+    y_bounds[0].x = center.y - SEARCH_RADIUS;
+    y_bounds[0].y = center.y + SEARCH_RADIUS;
 
-    z_bounds[0].x = clamp(center.z - SEARCH_RADIUS, 0.0f, (float)CELLS_GRID_DIMS.z);
-    z_bounds[0].y = clamp(center.z + SEARCH_RADIUS, 0.0f, (float)CELLS_GRID_DIMS.z);
+    z_bounds[0].x = center.z - SEARCH_RADIUS;
+    z_bounds[0].y = center.z + SEARCH_RADIUS;
 }
 
 
@@ -117,9 +127,12 @@ int search_neighbours(const float4 pos, int* neighbours)
                 // new position is inside image range
                 const float4 new_position = {x_offset, y_offset, z_offset, 1.0f};
                 const int cell_id = map_to_cell_id(new_position);
-                if(!contains_unsorted(cell_id, neighbours, num_neighbours))
+                if(cell_id != -1) // outside image bounds
                 {
-                    neighbours[num_neighbours++] = cell_id;
+                    if(!contains_unsorted(cell_id, neighbours, num_neighbours))
+                    {
+                        neighbours[num_neighbours++] = cell_id;
+                    }
                 }
             }
         }
@@ -197,15 +210,26 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
 }
 
 
-bool get_next_direction(const float4 prev_dir, const int num_valid_st,
-                          const int* valid_st, const int* closest_pts,
-                          __global const int* all_st_lengths,
-                          __global const int* all_st_offsets,
-                          __global const float4* all_st_points,
-                          float4* next_dir)
+bool get_next_direction(const float4 curr_pos, const float4 prev_dir,
+                        __global const int* cell_ids,
+                        __global const int* cell_st_counts,
+                        __global const int* cell_st_offsets,
+                        __global const int* cell_st_ids,
+                        __global const int* all_st_lengths,
+                        __global const int* all_st_offsets,
+                        __global const float4* all_st_points,
+                        int* neighbour_cells, int* valid_st,
+                        int* closest_pts, float4* next_dir)
 {
     // TODO: Merge with get_valid_trajectories to remove
     // double for loop on valid short-tracks
+    const int num_neighbours = search_neighbours(curr_pos, neighbour_cells);
+    const int num_valid_st = get_valid_trajectories(
+        curr_pos, num_neighbours, neighbour_cells,
+        cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
+        all_st_lengths, all_st_offsets, all_st_points, valid_st,
+        closest_pts);
+    
     float4 dir_i;
     next_dir[0] = (float4)(0.0f, 0.0f, 0.0f, 1.0f);
     bool is_valid = false;
@@ -268,45 +292,23 @@ int propagate_line(int num_strl_points, float4 curr_pos,
     bool propagation_can_continue = true;
     while(num_strl_points < MAX_STRL_LEN && propagation_can_continue)
     {
-        // First, we must test that we are inside a cell containing
-        // streamlines. If not, it means we are not inside the WM mask.
-        const int curr_pos_cell_id = map_to_cell_id(curr_pos);
-        if(dichotomic_search_cell(curr_pos_cell_id, cell_ids) == -1)
+        float4 next_dir[1];
+        const bool is_valid = get_next_direction(
+            curr_pos, last_dir, cell_ids, cell_st_counts,
+            cell_st_offsets, cell_st_ids, all_st_lengths,
+            all_st_offsets, all_st_points, neighbour_cells,
+            valid_st, closest_pts, next_dir);
+
+        if(is_valid)
         {
-            propagation_can_continue = false;
+            curr_pos = curr_pos + STEP_SIZE * next_dir[0];
+            last_dir = next_dir[0];
+            output_tracks[global_id*MAX_STRL_LEN+num_strl_points] = curr_pos;
+            ++num_strl_points;
         }
         else
         {
-            const int num_neighbours = search_neighbours(curr_pos, neighbour_cells);
-            const int num_valid_st = get_valid_trajectories(
-                curr_pos, num_neighbours, neighbour_cells,
-                cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-                all_st_lengths, all_st_offsets, all_st_points, valid_st,
-                closest_pts);
-
-            if(num_valid_st > 0)
-            {
-                float4 next_dir[1];
-                const bool is_valid = get_next_direction(
-                    last_dir, num_valid_st, valid_st, closest_pts,
-                    all_st_lengths, all_st_offsets, all_st_points, next_dir);
-
-                if(is_valid)
-                {
-                    curr_pos = curr_pos + STEP_SIZE * next_dir[0];
-                    last_dir = next_dir[0];
-                    output_tracks[global_id*MAX_STRL_LEN+num_strl_points] = curr_pos;
-                    ++num_strl_points;
-                }
-                else
-                {
-                    propagation_can_continue = false;
-                }
-            }
-            else
-            {
-                propagation_can_continue = false;
-            }
+            propagation_can_continue = false;
         }
     }
     return num_strl_points;
