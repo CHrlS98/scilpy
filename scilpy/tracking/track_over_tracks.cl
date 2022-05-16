@@ -204,6 +204,8 @@ bool get_next_direction(const float4 prev_dir, const int num_valid_st,
                           __global const float4* all_st_points,
                           float4* next_dir)
 {
+    // TODO: Merge with get_valid_trajectories to remove
+    // double for loop on valid short-tracks
     float4 dir_i;
     next_dir[0] = (float4)(0.0f, 0.0f, 0.0f, 1.0f);
     bool is_valid = false;

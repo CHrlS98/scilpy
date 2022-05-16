@@ -123,6 +123,9 @@ def create_accel_struct(strl_pts, strl_lengths, edge_length):
     # ici j'ai les id de toutes mes cellules non vides, triées
     cell_ids = np.unique(ravel_multi_index(strl_int, dims))
 
+    # TODO: pour accélérer la recherche dichotomique on pourrait
+    # diviser cell_ids en N cellules de taille égale.
+
     # pour chaque streamline, on génère les strl_counts
     offset = 0
     cell_strl_count = np.zeros(len(cell_ids), dtype=np.int32)
