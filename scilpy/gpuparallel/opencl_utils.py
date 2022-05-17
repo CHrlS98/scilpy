@@ -148,6 +148,7 @@ class CLManager(object):
                                  local_size,
                                  *self.input_buffers,
                                  *[out.buf for out in self.output_buffers])
+        wait_event.wait()
         outputs = []
         for output in self.output_buffers:
             out_arr = np.empty(output.shape, dtype=output.dtype, order='F')

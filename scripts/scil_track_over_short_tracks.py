@@ -4,10 +4,8 @@
 Generate complete streamlines from short-tracks tractogram.
 """
 import argparse
-import inspect
 import logging
-import scilpy
-import os
+
 from time import perf_counter
 
 import numpy as np
@@ -25,6 +23,7 @@ from scilpy.io.utils import (add_verbose_arg, assert_inputs_exist,
                              add_overwrite_arg)
 from scilpy.tracking.utils import add_seeding_options
 from scilpy.io.streamlines import load_tractogram_with_reference
+from scilpy.gpuparallel.opencl_utils import CLKernel, CLManager
 
 
 def _build_arg_parser():
@@ -190,8 +189,6 @@ def main():
     min_strl_len = int(args.min_length / args.step_size) + 1
 
     st_pts = np.concatenate(sft.streamlines, axis=0)
-    min_position = np.min(st_pts, axis=0)
-    st_pts -= min_position  # bounding box plus tight
 
     st_lengths = sft.streamlines._lengths
     st_offsets = np.append([0], np.cumsum(st_lengths)[:-1])
@@ -203,6 +200,7 @@ def main():
     max_density = int(np.max(cell_st_counts))
     logging.info('Created acceleration structure in {0:.2f}s.'
                  .format(perf_counter() - t0))
+    logging.info('Structure contains {0} cells.'.format(len(cell_ids)))
 
     # generate seeds
     if args.npv:
@@ -222,9 +220,9 @@ def main():
         seeds_count=nb_seeds,
         seed_count_per_voxel=seed_per_vox,
         random_seed=args.rand)
-    seed_pts -= min_position
+    nb_seeds = len(seed_pts)
     logging.info('Generated {0} seed positions in {1:.2f}s.'
-                 .format(len(seed_pts), perf_counter() - t0))
+                 .format(nb_seeds, perf_counter() - t0))
 
     # prepare arrays for gpu
     cell_ids = np.asarray(cell_ids, dtype=np.int32)
@@ -233,81 +231,58 @@ def main():
     cell_st_ids = np.asarray(cell_st_ids, dtype=np.int32)
     st_lengths = np.asarray(st_lengths, dtype=np.int32)
     st_offsets = np.asarray(st_offsets, dtype=np.int32)
-    st_pts = np.column_stack((st_pts, np.ones(len(st_pts)))).astype(np.float32)
-    seed_pts = np.column_stack((seed_pts, np.ones(len(seed_pts))))\
+    st_pts = np.column_stack((st_pts, np.ones(len(st_pts)))).flatten()\
+        .astype(np.float32)
+    seed_pts = np.column_stack((seed_pts, np.ones(len(seed_pts)))).flatten()\
         .astype(np.float32)
 
-    # output buffer
-    out_tracks = np.zeros((max_strl_len * len(seed_pts), 4), dtype=np.float32)
-
-    # create context and command queue
-    ctx = cl.create_some_context(interactive=False)
-    queue = cl.CommandQueue(ctx)
-
-    # copy arrays to device (gpu)
-    cell_ids_dev = cl.array.to_device(queue, cell_ids)
-    cell_st_counts_dev = cl.array.to_device(queue, cell_st_counts)
-    cell_st_offsets_dev = cl.array.to_device(queue, cell_st_offsets)
-    cell_st_ids_dev = cl.array.to_device(queue, cell_st_ids)
-    st_lengths_dev = cl.array.to_device(queue, st_lengths)
-    st_offsets_dev = cl.array.to_device(queue, st_offsets)
-    st_pts_dev = cl.array.to_device(queue, st_pts)
-    seed_pts_dev = cl.array.to_device(queue, seed_pts)
-    out_tracks_dev = cl.array.to_device(queue, out_tracks)
-
-    # read CL kernel code
-    module_path = inspect.getfile(scilpy)
-    cl_code_path = os.path.join(os.path.dirname(module_path),
-                                'tracking', 'track_over_tracks.cl')
-    code_str = get_cl_code_string(cl_code_path)
+    cl_kernel = CLKernel('track_over_tracks', 'tracking',
+                         'track_over_tracks.cl')
 
     # add compiler definitions
-    num_cells_str = f'#define NUM_CELLS {len(cell_ids)}\n'
-    search_rad_str = f'#define SEARCH_RADIUS {vox_search_radius:.5}f\n'
-    edge_len_str = f'#define EDGE_LENGTH {edge_length:.5}f\n'
-    max_density_str = f'#define MAX_DENSITY {max_density}\n'
-    max_search_neighbours_str =\
-        f'#define MAX_SEARCH_NEIGHBOURS {max_search_neighbours}\n'
-    xmax_str = f'#define XMAX {grid_dims[0]}\n'
-    ymax_str = f'#define YMAX {grid_dims[1]}\n'
-    zmax_str = f'#define ZMAX {grid_dims[2]}\n'
-    max_strl_len_str = f'#define MAX_STRL_LEN {max_strl_len}\n'
-    min_cos_angle_str = f'#define MIN_COS_ANGLE {min_cos_angle:.5}f\n'
-    min_cos_angle_init_str =\
-        f'#define MIN_COS_ANGLE_INIT {min_cos_angle_init:.5}f\n'
-    vox_step_size_str = f'#define STEP_SIZE {vox_step_size}f\n'
+    cl_kernel.set_define('NUM_CELLS', f'{len(cell_ids)}')
+    cl_kernel.set_define('SEARCH_RADIUS', f'{vox_search_radius:.5}f')
+    cl_kernel.set_define('EDGE_LENGTH', f'{edge_length:.5}f')
+    cl_kernel.set_define('MAX_DENSITY', f'{max_density}')
+    cl_kernel.set_define('MAX_SEARCH_NEIGHBOURS', f'{max_search_neighbours}')
+    cl_kernel.set_define('CELLS_XMAX', f'{grid_dims[0]}')
+    cl_kernel.set_define('CELLS_YMAX', f'{grid_dims[1]}')
+    cl_kernel.set_define('CELLS_ZMAX', f'{grid_dims[2]}')
+    cl_kernel.set_define('MAX_STRL_LEN', f'{max_strl_len}')
+    cl_kernel.set_define('MIN_COS_ANGLE', f'{min_cos_angle:.5}f')
+    cl_kernel.set_define('MIN_COS_ANGLE_INIT', f'{min_cos_angle_init:.5}f')
+    cl_kernel.set_define('STEP_SIZE', f'{vox_step_size}f')
 
-    code_str =\
-        num_cells_str + search_rad_str + edge_len_str +\
-        max_density_str + max_search_neighbours_str + xmax_str +\
-        ymax_str + zmax_str + max_strl_len_str + min_cos_angle_str +\
-        min_cos_angle_init_str + vox_step_size_str + code_str
+    cl_manager = CLManager(cl_kernel, n_inputs=8, n_outputs=2)
 
-    # create program
-    program = cl.Program(ctx, code_str).build()
+    # inputs
+    cl_manager.add_input_buffer(0, cell_ids, dtype=cell_ids.dtype)
+    cl_manager.add_input_buffer(1, cell_st_counts, dtype=cell_st_counts.dtype)
+    cl_manager.add_input_buffer(2, cell_st_offsets, dtype=cell_st_offsets.dtype)
+    cl_manager.add_input_buffer(3, cell_st_ids, dtype=cell_st_ids.dtype)
+    cl_manager.add_input_buffer(4, st_lengths, dtype=st_lengths.dtype)
+    cl_manager.add_input_buffer(5, st_offsets, dtype=st_offsets.dtype)
+    cl_manager.add_input_buffer(6, st_pts, dtype=st_pts.dtype)
+    cl_manager.add_input_buffer(7, seed_pts, dtype=seed_pts.dtype)
+
+    # outputs
+    cl_manager.add_output_buffer(0, (nb_seeds*max_strl_len*4,),
+                                 dtype=np.float32)
+    cl_manager.add_output_buffer(1, (nb_seeds,), dtype=np.int32)
 
     t0 = perf_counter()
-    logging.info(f'Launching tracking for {seed_pts_dev.shape[:-1]} '
-                 'seed positions.')
-    evt = program.track_over_tracks(
-        queue, seed_pts_dev.shape[:1], None, cell_ids_dev.data,
-        cell_st_counts_dev.data, cell_st_offsets_dev.data,
-        cell_st_ids_dev.data, st_lengths_dev.data, st_offsets_dev.data,
-        st_pts_dev.data, seed_pts_dev.data, out_tracks_dev.data)
+    logging.info(f'Launching tracking...')
+    output_tracks, output_tracks_len = cl_manager.run((nb_seeds, 1, 1))
+    output_tracks = np.asarray(output_tracks).reshape((-1, 4))
 
-    evt.wait()
+    strl = []
+    for i in range(nb_seeds):
+        num_pts = output_tracks_len[i]
+        if(num_pts >= min_strl_len):
+            strl_pts = output_tracks[i*max_strl_len:i*max_strl_len+num_pts]
+            strl.append(strl_pts[..., :-1])
     logging.info(f'Tracking finished in {perf_counter() - t0:.2f}s.')
 
-    output_tracks = np.asarray(out_tracks_dev.get())
-    strl = []
-    for i in range(seed_pts_dev.shape[0]):
-        strl_pts = output_tracks[i*max_strl_len:i*max_strl_len+max_strl_len]
-        strl_pts = strl_pts[strl_pts[..., -1] > 0]
-        if(len(strl_pts >= min_strl_len)):
-            strl_pts = strl_pts[..., :-1] + min_position
-            strl.append(strl_pts)
-
-    # save output tractogram
     logging.info('Saving output tractogram.')
     out_sft = StatefulTractogram.from_sft(strl, sft)
     out_sft.remove_invalid_streamlines()

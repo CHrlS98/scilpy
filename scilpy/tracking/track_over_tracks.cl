@@ -12,9 +12,9 @@ NOTES:
 #define EDGE_LENGTH 0.0f
 #define MAX_DENSITY 0
 #define MAX_SEARCH_NEIGHBOURS 0
-#define XMAX 0
-#define YMAX 0
-#define ZMAX 0
+#define CELLS_XMAX 0
+#define CELLS_YMAX 0
+#define CELLS_ZMAX 0
 #define MAX_STRL_LEN 0
 #define MIN_COS_ANGLE 0.0f
 #define MIN_COS_ANGLE_INIT 0.0f
@@ -22,7 +22,8 @@ NOTES:
 
 // everything above next line will be removed
 //$TRIMABOVE$
-const int4 CELLS_GRID_DIMS = {XMAX, YMAX, ZMAX, 0};
+const float FLOAT_EPS = 0.0001f;
+const int4 CELLS_GRID_DIMS = {CELLS_XMAX, CELLS_YMAX, CELLS_ZMAX, 0};
 
 int dichotomic_search_cell(const int id, __global const int* cell_ids)
 {
@@ -118,11 +119,11 @@ int search_neighbours(const float4 pos, int* neighbours)
     get_search_boundaries(pos, x_bounds, y_bounds, z_bounds);
 
     int num_neighbours = 0;
-    for(float x_offset = x_bounds[0].x; x_offset <= x_bounds[0].y; x_offset += EDGE_LENGTH)
+    for(float x_offset = x_bounds[0].x; x_offset < x_bounds[0].y + FLOAT_EPS; x_offset += EDGE_LENGTH)
     {
-        for(float y_offset = y_bounds[0].x; y_offset <= y_bounds[0].y; y_offset += EDGE_LENGTH)
+        for(float y_offset = y_bounds[0].x; y_offset < y_bounds[0].y + FLOAT_EPS; y_offset += EDGE_LENGTH)
         {
-            for(float z_offset = z_bounds[0].x; z_offset <= z_bounds[0].y; z_offset += EDGE_LENGTH)
+            for(float z_offset = z_bounds[0].x; z_offset < z_bounds[0].y + FLOAT_EPS; z_offset += EDGE_LENGTH)
             {
                 // new position is inside image range
                 const float4 new_position = {x_offset, y_offset, z_offset, 1.0f};
@@ -140,16 +141,11 @@ int search_neighbours(const float4 pos, int* neighbours)
     return num_neighbours;
 }
 
-
-int get_valid_trajectories(const float4 current_position, const int num_neighbours,
-                           const int* neighbour_cells, __global const int* cell_ids,
-                           __global const int* cell_st_counts, __global const int* cell_st_offsets,
-                           __global const int* cell_st_ids, __global const int* all_st_lengths,
-                           __global const int* all_st_offsets, __global const float4* all_st_points,
-                           int* valid_st, int* closest_pts)
+int get_unique_trajectories(const int num_neighbours, const int* neighbour_cells,
+                            __global const int* cell_ids, __global const int* cell_st_counts,
+                            __global const int* cell_st_offsets, __global const int* cell_st_ids,
+                            int* unique_st)
 {
-    // maximum number of short-tracks is MAX_SEARCH_NEIGHBOURS*MAX_DENSITY
-    int unique_st[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
     int num_unique_st = 0;
 
     // go through all neighbour cells and add short-track ids, without duplicates
@@ -174,11 +170,27 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
             }
         }
     }
+    return num_unique_st;
+}
+
+
+int get_valid_trajectories(const float4 current_position, const float4 prev_dir, const int num_neighbours,
+                           const int* neighbour_cells, __global const int* cell_ids,
+                           __global const int* cell_st_counts, __global const int* cell_st_offsets,
+                           __global const int* cell_st_ids, __global const int* all_st_lengths,
+                           __global const int* all_st_offsets, __global const float4* all_st_points,
+                           float4* next_dir)
+{
+    int unique_st[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
+    int num_unique_st = get_unique_trajectories(
+        num_neighbours, neighbour_cells, cell_ids, cell_st_counts,
+        cell_st_offsets, cell_st_ids, unique_st);
 
     // The candidate short-tracks may be outside the search radius,
     // so we need to compute the distance between the current position
     // and each short-tracks.
     int num_valid_st = 0;
+    float4 dir_i;
     for(int i  = 0; i < num_unique_st; ++i)
     {
         const int st_id = unique_st[i];
@@ -187,6 +199,8 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
 
         float min_distance = SEARCH_RADIUS;
         int closest_pt_id = -1;
+        // TODO: Je veux:
+        // 1. que ma plus petite MEAN DISTANCE soit inferieure a mon search radius!!
         for(int point_id = st_offset; point_id < st_offset + st_length; ++point_id)
         {
             // to be valid, a streamline must have at least
@@ -199,10 +213,38 @@ int get_valid_trajectories(const float4 current_position, const int num_neighbou
                 closest_pt_id = point_id;
             }
         }
+
+        // if short-track is valid
         if(closest_pt_id >= 0)
         {
-            valid_st[num_valid_st] = st_id;
-            closest_pts[num_valid_st] = closest_pt_id;
+            dir_i = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
+            const int first_pt_id = all_st_offsets[st_id];
+            const int last_pt_id = first_pt_id + all_st_lengths[st_id];
+            if(closest_pt_id > first_pt_id)
+            {
+                // not the first point of streamline
+                const float4 p0 = all_st_points[closest_pt_id - 1];
+                const float4 p1 = all_st_points[closest_pt_id];
+                dir_i.xyz += (p1 - p0).xyz;
+            }
+            if(closest_pt_id < last_pt_id - 1)
+            {
+                // not the last point of streamline
+                const float4 p0 = all_st_points[closest_pt_id];
+                const float4 p1 = all_st_points[closest_pt_id + 1];
+                dir_i.xyz += (p1 - p0).xyz;
+            }
+            if(dot(normalize(dir_i.xyz), prev_dir.xyz) < 0.0f)
+            {
+                dir_i.xyz = -dir_i.xyz;
+            }
+
+            // deviation angle test
+            const float deviation = dot(normalize(dir_i.xyz), prev_dir.xyz);
+            if(deviation > MIN_COS_ANGLE)
+            {
+                next_dir[0].xyz += deviation * dir_i.xyz;
+            }
             ++num_valid_st;
         }
     }
@@ -221,56 +263,20 @@ bool get_next_direction(const float4 curr_pos, const float4 prev_dir,
                         int* neighbour_cells, int* valid_st,
                         int* closest_pts, float4* next_dir)
 {
-    // TODO: Merge with get_valid_trajectories to remove
-    // double for loop on valid short-tracks
     const int num_neighbours = search_neighbours(curr_pos, neighbour_cells);
-    const int num_valid_st = get_valid_trajectories(
-        curr_pos, num_neighbours, neighbour_cells,
-        cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-        all_st_lengths, all_st_offsets, all_st_points, valid_st,
-        closest_pts);
-    
-    float4 dir_i;
     next_dir[0] = (float4)(0.0f, 0.0f, 0.0f, 1.0f);
-    bool is_valid = false;
-    for(int i = 0; i < num_valid_st; ++i)
+    const int num_valid_st = get_valid_trajectories(
+        curr_pos, prev_dir, num_neighbours, neighbour_cells,
+        cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
+        all_st_lengths, all_st_offsets, all_st_points, next_dir);
+
+    if(num_valid_st > 0)
     {
-        dir_i = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
-        const int closest_pt_id = closest_pts[i];
-        const int st_id = valid_st[i];
-        const int first_pt_id = all_st_offsets[st_id];
-        const int last_pt_id = first_pt_id + all_st_lengths[st_id];
-        if(closest_pt_id > first_pt_id)
-        {
-            // not the first point of streamline
-            const float4 p0 = all_st_points[closest_pt_id - 1];
-            const float4 p1 = all_st_points[closest_pt_id];
-            dir_i.xyz += (p1 - p0).xyz;
-        }
-        if(closest_pt_id < last_pt_id - 1)
-        {
-            // not the last point of streamline
-            const float4 p0 = all_st_points[closest_pt_id];
-            const float4 p1 = all_st_points[closest_pt_id + 1];
-            dir_i.xyz += (p1 - p0).xyz;
-        }
-        if(dot(normalize(dir_i.xyz), prev_dir.xyz) < 0.0f)
-        {
-            dir_i.xyz = -dir_i.xyz;
-        }
-
-        // deviation angle test
-        const float deviation = dot(normalize(dir_i.xyz), prev_dir.xyz);
-        if(deviation > MIN_COS_ANGLE)
-        {
-            next_dir[0].xyz += deviation * dir_i.xyz;
-            is_valid = true;
-        }
+        // normalize direction
+        next_dir[0].xyz = normalize(next_dir[0].xyz);
+        return true;
     }
-
-    // normalize direction
-    next_dir[0].xyz = normalize(next_dir[0].xyz);
-    return is_valid;
+    return false;
 }
 
 
@@ -326,64 +332,77 @@ bool get_init_direction(const float4 seed_pos,
                         float4* init_dir)
 {
     int neighbour_cells[MAX_SEARCH_NEIGHBOURS];
-    int valid_st[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
-    int closest_pts[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
 
     const int num_neighbours = search_neighbours(seed_pos, neighbour_cells);
-    const int num_valid_st = get_valid_trajectories(
-        seed_pos, num_neighbours, neighbour_cells,
-        cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-        all_st_lengths, all_st_offsets, all_st_points, valid_st,
-        closest_pts);
 
-    if(num_valid_st == 0)
-    {
-        return false;
-    }
+    int unique_st[MAX_SEARCH_NEIGHBOURS*MAX_DENSITY];
+    int num_unique_st = get_unique_trajectories(
+        num_neighbours, neighbour_cells, cell_ids, cell_st_counts,
+        cell_st_offsets, cell_st_ids, unique_st);
 
+    int num_valid_st = 0;
+    float4 dir_i;
     float4 direction = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
-    for(int i = 0; i < num_valid_st; ++i)
+    for(int i  = 0; i < num_unique_st; ++i)
     {
-        float4 dir_i = {0.0f, 0.0f, 0.0f, 0.0f};
-        const int closest_pt_id = closest_pts[i];
-        const int st_id = valid_st[i];
-        const int first_pt_id = all_st_offsets[st_id];
-        const int last_pt_id = first_pt_id + all_st_lengths[st_id];
-        if(closest_pt_id > first_pt_id)
-        {
-            // not the first point of streamline
-            const float4 p0 = all_st_points[closest_pt_id - 1];
-            const float4 p1 = all_st_points[closest_pt_id];
-            dir_i.xyz += (p1 - p0).xyz;
-        }
-        if(closest_pt_id < last_pt_id - 1)
-        {
-            // not the last point of streamline
-            const float4 p0 = all_st_points[closest_pt_id];
-            const float4 p1 = all_st_points[closest_pt_id + 1];
-            dir_i.xyz += (p1 - p0).xyz;
-        }
+        const int st_id = unique_st[i];
+        const int st_length = all_st_lengths[st_id];
+        const int st_offset = all_st_offsets[st_id];
 
-        if(i == 0)
+        float min_distance = SEARCH_RADIUS;
+        int closest_pt_id = -1;
+        for(int point_id = st_offset; point_id < st_offset + st_length; ++point_id)
         {
-            direction = dir_i;
+            // to be valid, a streamline must have at least
+            // one point inside the search_radius
+            const float4 current_st_point = all_st_points[point_id];
+            const float dist_to_curr_position = distance(current_st_point.xyz, seed_pos.xyz);
+            if(dist_to_curr_position < min_distance)
+            {
+                min_distance = dist_to_curr_position;
+                closest_pt_id = point_id;
+            }
         }
-        else if(dot(normalize(dir_i.xyz), normalize(direction.xyz)) < 0.0f)
+        if(closest_pt_id >= 0)
         {
-            dir_i.xyz = -dir_i.xyz;
-        }
+            dir_i = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
+            const int first_pt_id = all_st_offsets[st_id];
+            const int last_pt_id = first_pt_id + all_st_lengths[st_id];
+            if(closest_pt_id > first_pt_id)
+            {
+                // not the first point of streamline
+                const float4 p0 = all_st_points[closest_pt_id - 1];
+                const float4 p1 = all_st_points[closest_pt_id];
+                dir_i.xyz += (p1 - p0).xyz;
+            }
+            if(closest_pt_id < last_pt_id - 1)
+            {
+                // not the last point of streamline
+                const float4 p0 = all_st_points[closest_pt_id];
+                const float4 p1 = all_st_points[closest_pt_id + 1];
+                dir_i.xyz += (p1 - p0).xyz;
+            }
 
-        // deviation angle test
-        if(dot(normalize(dir_i.xyz), normalize(direction.xyz))
-           > MIN_COS_ANGLE_INIT)
-        {
-            direction.xyz += dir_i.xyz;
+            if(num_valid_st == 0)
+            {
+                direction = dir_i;
+            }
+            else if(dot(normalize(dir_i.xyz), normalize(direction.xyz)) < 0.0f)
+            {
+                dir_i.xyz = -dir_i.xyz;
+            }
+            // deviation angle test
+            if(dot(normalize(dir_i.xyz), normalize(direction.xyz)) > MIN_COS_ANGLE_INIT)
+            {
+                direction.xyz += dir_i.xyz;
+                num_valid_st += 1;
+            }
         }
     }
 
     init_dir[0].xyz = direction.xyz;
     init_dir[0].w = 1.0f;
-    return true;
+    return num_valid_st > 0;
 }
 
 
@@ -411,48 +430,48 @@ __kernel void track_over_tracks(__global const int* cell_ids,
                                 __global const int* all_st_offsets,
                                 __global const float4* all_st_points,
                                 __global const float4* seed_points,
-                                __global float4* output_tracks)
+                                __global float4* output_tracks,
+                                __global int* output_tracks_len)
 {
     const size_t global_id = get_global_id(0);
     float4 position = seed_points[global_id];
+    int num_strl_points = 0;
 
     float4 last_dir[1];
     bool found_init_dir = get_init_direction(
         position, cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
         all_st_lengths, all_st_offsets, all_st_points, last_dir);
 
-    // maybe no init direction is found. return
-    if(!found_init_dir)
+    if(found_init_dir)
     {
-        return;
-    }
-
-    // forward track
-    output_tracks[global_id*MAX_STRL_LEN] = position;
-    int num_strl_points = propagate_line(
-        1, seed_points[global_id], last_dir[0], global_id,
-        cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-        all_st_lengths, all_st_offsets, all_st_points, output_tracks);
-
-    // if the number of point is smaller than MAX_STRL_LEN,
-    // we can perform backward tracking.
-    if(num_strl_points < MAX_STRL_LEN)
-    {
-        reverse_streamline(num_strl_points, global_id, output_tracks);
-
-        // if the forward tracking yielded a streamline,
-        // use it for initial direction in backward tracking
-        if(num_strl_points > 1)
-        {
-            const float4 p0 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-2];
-            const float4 p1 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-1];
-            last_dir[0].xyz = normalize(p1.xyz - p0.xyz);
-        }
-
-        // backward track
-        propagate_line(
-            num_strl_points, seed_points[global_id], last_dir[0], global_id,
+        // forward track
+        output_tracks[global_id*MAX_STRL_LEN] = position;
+        num_strl_points = propagate_line(
+            1, seed_points[global_id], last_dir[0], global_id,
             cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
             all_st_lengths, all_st_offsets, all_st_points, output_tracks);
+
+        // if the number of point is smaller than MAX_STRL_LEN,
+        // we can perform backward tracking.
+        if(num_strl_points < MAX_STRL_LEN)
+        {
+            reverse_streamline(num_strl_points, global_id, output_tracks);
+
+            // if the forward tracking yielded a streamline,
+            // use it for initial direction in backward tracking
+            if(num_strl_points > 1)
+            {
+                const float4 p0 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-2];
+                const float4 p1 = output_tracks[global_id*MAX_STRL_LEN+num_strl_points-1];
+                last_dir[0].xyz = normalize(p1.xyz - p0.xyz);
+            }
+
+            // backward track
+            num_strl_points = propagate_line(
+                num_strl_points, seed_points[global_id], last_dir[0], global_id,
+                cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
+                all_st_lengths, all_st_offsets, all_st_points, output_tracks);
+        }
     }
+    output_tracks_len[global_id] = num_strl_points;
 }
