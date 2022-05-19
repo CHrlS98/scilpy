@@ -30,6 +30,9 @@ def _build_arg_parser():
     p.add_argument('--save',
                    help='If set, save a screenshot of the result in the '
                         'specified filename')
+    p.add_argument('--opacity', type=float, default=1.0,
+                   help='Opacity of the streamlines')
+
     add_overwrite_arg(p)
 
     return p
@@ -58,7 +61,7 @@ def main():
     seeds = tractogram.data_per_streamline['seeds']
 
     # Make display objects
-    streamlines_actor = actor.line(streamlines)
+    streamlines_actor = actor.line(streamlines, opacity=args.opacity)
     points = actor.dots(seeds, color=(1., 1., 1.))
 
     # Add display objects to canvas
