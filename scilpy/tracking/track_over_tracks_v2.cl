@@ -16,7 +16,7 @@ NOTES:
 #define CELLS_ZMAX 0
 #define MAX_STRL_LEN 0
 #define MIN_COS_ANGLE 0.0f
-#define MIN_COS_ANGLE_INIT 0.0f
+#define MIN_COS_ANGLE_INIT 0.0f  // je veux plus ca on va choisir une trajectoire at random a la place
 #define STEP_SIZE 0.0f
 #define BUNDLING_RADIUS 4.0f
 
@@ -128,6 +128,9 @@ int search_neighbours(const float4 pos, int* neighbours)
                 const int cell_id = map_to_cell_id(new_position);
                 if(cell_id != -1) // outside image bounds
                 {
+                    // peut-être que le edge_len devrait tlt être un peu plus petit
+                    // que le search radius pour tout le temps chercher dans les 27 voisins
+                    // sans se taper un contains unsorted a chaque step.
                     if(!contains_unsorted(cell_id, neighbours, num_neighbours))
                     {
                         neighbours[num_neighbours++] = cell_id;
@@ -176,6 +179,8 @@ int get_unique_trajectories(const int num_neighbours, const int* neighbour_cells
 }
 
 
+// TODO: Ça va changer parce que nos points candidats sont toujours les premiers des streamlines.
+// Ou pas selon si la streamline est flipped. Check à faire possiblement au niveau CPU.
 bool get_next_direction(const float4 curr_pos, const float4 prev_dir,
                         __global const int* cell_ids, __global const int* cell_st_counts,
                         __global const int* cell_st_offsets, __global const int* cell_st_ids,

@@ -10,9 +10,7 @@ from time import perf_counter
 
 import numpy as np
 import nibabel as nib
-import pyopencl as cl
 
-from pyopencl import array
 from numba import jit
 from dipy.tracking.utils import random_seeds_from_mask
 from dipy.io.stateful_tractogram import StatefulTractogram
