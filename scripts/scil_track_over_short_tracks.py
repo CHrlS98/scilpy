@@ -64,19 +64,6 @@ def _build_arg_parser():
     return p
 
 
-def get_cl_code_string(fpath):
-    f = open(fpath, 'r')
-    code_str = f.read()
-    f.close()
-
-    # optionally remove code above the //$TRIMABOVE$ mark,
-    # useful for replacing define and structs inside file
-    trim = code_str.find("//$TRIMABOVE$")
-    if trim > 0:
-        code_str = code_str[trim:]
-    return code_str
-
-
 @jit(nopython=True, cache=True)
 def dichotomic_search(value, array):
     num_values = len(array)
@@ -104,7 +91,6 @@ def dichotomic_search(value, array):
 
 @jit(nopython=True, cache=True)
 def ravel_multi_index(indices, dims):
-    # print("RAVEL MULTI INDEX")
     flat_index = np.zeros(len(indices), dtype=np.int32)
     for i, id in enumerate(indices):
         flat_index[i] = (id[2] * dims[1] * dims[0] +
@@ -113,7 +99,69 @@ def ravel_multi_index(indices, dims):
 
 
 @jit(nopython=True, cache=True)
+def create_accel_struct_from_seeds(seed_pts, edge_length):
+    """
+    Create an acceleration structure for searching nearest
+    streamlines on the GPU using a regular grid.
+
+    Parameters
+    ----------
+    seed_pts : ndarray
+        Array of streamline seed points.
+    edge_length : float
+        Edge length of the regular grid bins.
+    """
+    seed_int = (seed_pts / edge_length).astype(np.int32)
+    dims = (np.max(seed_int[:, 0]) + 1,
+            np.max(seed_int[:, 1]) + 1,
+            np.max(seed_int[:, 2]) + 1)
+
+    # ici j'ai les id de toutes mes cellules non vides, triées
+    cell_ids = np.unique(ravel_multi_index(seed_int, dims))
+
+    # pour chaque streamline, on génère les strl_counts
+    # nombre de streamlines qui traverse chaque cellule de la grille
+    cell_strl_count = np.zeros(len(cell_ids), dtype=np.int32)
+    for seed_i in range(len(seed_int)):
+        curr_cell_id = ravel_multi_index(seed_int[seed_i:seed_i + 1], dims)
+        pos = dichotomic_search(curr_cell_id, cell_ids)
+        cell_strl_count[pos] += 1
+
+    # offsets in streamlines ids array
+    cell_strl_offsets = np.append([0], np.cumsum(cell_strl_count)[:-1])
+
+    # on va devoir repasser à travers toutes les streamlines
+    # pour generer le tableau de streamline ids
+    cell_strl_ids = np.full(np.sum(cell_strl_count), -1, dtype=np.int32)
+
+    for strl_id in range(len(seed_int)):
+        curr_cell_id = ravel_multi_index(seed_int[strl_id:strl_id + 1], dims)
+
+        pos = dichotomic_search(curr_cell_id, cell_ids)
+        cell_strl_offset = cell_strl_offsets[pos]
+        emplace_pos = 0
+        while cell_strl_ids[cell_strl_offset + emplace_pos] >= 0:
+            emplace_pos += 1
+        cell_strl_ids[cell_strl_offset + emplace_pos] = strl_id
+
+    return cell_ids, cell_strl_count, cell_strl_offsets, cell_strl_ids, dims
+
+
+@jit(nopython=True, cache=True)
 def create_accel_struct(strl_pts, strl_lengths, edge_length):
+    """
+    Create an acceleration structure for searching nearest
+    streamlines on the GPU using a regular grid.
+
+    Parameters
+    ----------
+    strl_pts : ndarray
+        Array of streamline points.
+    strl_lengths : ndarray
+        Array of streamline lengths.
+    edge_length : float
+        Edge length of the regular grid bins.
+    """
     strl_int = (strl_pts / edge_length).astype(np.int32)
     dims = (np.max(strl_int[:, 0]) + 1,
             np.max(strl_int[:, 1]) + 1,
@@ -122,10 +170,8 @@ def create_accel_struct(strl_pts, strl_lengths, edge_length):
     # ici j'ai les id de toutes mes cellules non vides, triées
     cell_ids = np.unique(ravel_multi_index(strl_int, dims))
 
-    # TODO: pour accélérer la recherche dichotomique on pourrait
-    # diviser cell_ids en N cellules de taille égale.
-
     # pour chaque streamline, on génère les strl_counts
+    # nombre de streamlins qui traverse chaque cellule de la grille
     offset = 0
     cell_strl_count = np.zeros(len(cell_ids), dtype=np.int32)
     for length in strl_lengths:
@@ -176,12 +222,14 @@ def main():
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
     sft.to_vox()
     sft.to_corner()
+    # st_seeds are (vox, center) but we want them (vox, corner)
+    st_seeds = sft.data_per_streamline['seeds'] + 0.5
+
     logging.info('Loaded tractogram containing {0} streamlines in {1:.2f}s.'
                  .format(len(sft.streamlines), perf_counter() - t0))
 
     vox_search_radius = args.search_radius / sft.voxel_sizes[0]
     vox_step_size = args.step_size / sft.voxel_sizes[0]
-    edge_length = args.bbox_edge_length / sft.voxel_sizes[0]
     max_search_neighbours = int(2 * vox_search_radius / edge_length + 1)**3
     min_cos_angle = float(np.cos(np.deg2rad(args.theta)))
     min_cos_angle_init = float(np.cos(np.deg2rad(args.theta_init)))
@@ -189,6 +237,7 @@ def main():
     min_strl_len = int(args.min_length / args.step_size) + 1
 
     st_pts = np.concatenate(sft.streamlines, axis=0)
+    st_barycenters = [np.mean(s, axis=0) for s in sft.streamlines]
 
     st_lengths = sft.streamlines._lengths
     st_offsets = np.append([0], np.cumsum(st_lengths)[:-1])
@@ -196,11 +245,22 @@ def main():
     # create acceleration structure around streamline points
     t0 = perf_counter()
     cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids, grid_dims =\
-        create_accel_struct(st_pts, st_lengths, edge_length)
+        create_accel_struct_from_seeds(st_seeds, st_lengths, vox_search_radius)
+    min_density = int(np.min(cell_st_counts))
     max_density = int(np.max(cell_st_counts))
     logging.info('Created acceleration structure in {0:.2f}s.'
                  .format(perf_counter() - t0))
-    logging.info('Structure contains {0} cells.'.format(len(cell_ids)))
+    logging.info('Structure contains {0} cells. Min(max) density '
+                 ' is {1}({2}). Mean density is {3:.2f}.'
+                 .format(len(cell_ids), min_density, max_density,
+                         np.mean(cell_st_counts)))
+
+    from fury import window, actor
+    s = window.Scene()
+    strl_viz = [sft.streamlines[s] for s in cell_st_ids[:8]]
+    line = actor.line(strl_viz)
+    s.add(line)
+    window.show(s)
 
     # generate seeds
     if args.npv:
@@ -220,6 +280,7 @@ def main():
         seeds_count=nb_seeds,
         seed_count_per_voxel=seed_per_vox,
         random_seed=args.rand)
+    # seed_pts = np.tile(seed_pts, (5, 1))
     nb_seeds = len(seed_pts)
     logging.info('Generated {0} seed positions in {1:.2f}s.'
                  .format(nb_seeds, perf_counter() - t0))
@@ -233,16 +294,17 @@ def main():
     st_offsets = np.asarray(st_offsets, dtype=np.int32)
     st_pts = np.column_stack((st_pts, np.ones(len(st_pts)))).flatten()\
         .astype(np.float32)
+    st_barycenters = np.asarray(st_barycenters, dtype=np.float32).flatten()
     seed_pts = np.column_stack((seed_pts, np.ones(len(seed_pts)))).flatten()\
         .astype(np.float32)
 
     cl_kernel = CLKernel('track_over_tracks', 'tracking',
-                         'track_over_tracks.cl')
+                         'track_over_tracks_v2.cl')
 
     # add compiler definitions
     cl_kernel.set_define('NUM_CELLS', f'{len(cell_ids)}')
     cl_kernel.set_define('SEARCH_RADIUS', f'{vox_search_radius:.5}f')
-    cl_kernel.set_define('EDGE_LENGTH', f'{edge_length:.5}f')
+    # cl_kernel.set_define('EDGE_LENGTH', f'{edge_length:.5}f')
     cl_kernel.set_define('MAX_DENSITY', f'{max_density}')
     cl_kernel.set_define('MAX_SEARCH_NEIGHBOURS', f'{max_search_neighbours}')
     cl_kernel.set_define('CELLS_XMAX', f'{grid_dims[0]}')
@@ -253,7 +315,7 @@ def main():
     cl_kernel.set_define('MIN_COS_ANGLE_INIT', f'{min_cos_angle_init:.5}f')
     cl_kernel.set_define('STEP_SIZE', f'{vox_step_size}f')
 
-    cl_manager = CLManager(cl_kernel, n_inputs=8, n_outputs=2)
+    cl_manager = CLManager(cl_kernel, n_inputs=9, n_outputs=2)
 
     # inputs
     cl_manager.add_input_buffer(0, cell_ids, dtype=cell_ids.dtype)
@@ -263,7 +325,8 @@ def main():
     cl_manager.add_input_buffer(4, st_lengths, dtype=st_lengths.dtype)
     cl_manager.add_input_buffer(5, st_offsets, dtype=st_offsets.dtype)
     cl_manager.add_input_buffer(6, st_pts, dtype=st_pts.dtype)
-    cl_manager.add_input_buffer(7, seed_pts, dtype=seed_pts.dtype)
+    cl_manager.add_input_buffer(7, st_barycenters, dtype=st_barycenters.dtype)
+    cl_manager.add_input_buffer(8, seed_pts, dtype=seed_pts.dtype)
 
     # outputs
     cl_manager.add_output_buffer(0, (nb_seeds*max_strl_len*4,),
