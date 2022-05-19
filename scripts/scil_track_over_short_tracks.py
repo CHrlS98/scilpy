@@ -230,7 +230,6 @@ def main():
 
     vox_search_radius = args.search_radius / sft.voxel_sizes[0]
     vox_step_size = args.step_size / sft.voxel_sizes[0]
-    max_search_neighbours = int(2 * vox_search_radius / edge_length + 1)**3
     min_cos_angle = float(np.cos(np.deg2rad(args.theta)))
     min_cos_angle_init = float(np.cos(np.deg2rad(args.theta_init)))
     max_strl_len = int(args.max_length / args.step_size) + 1
@@ -306,7 +305,7 @@ def main():
     cl_kernel.set_define('SEARCH_RADIUS', f'{vox_search_radius:.5}f')
     # cl_kernel.set_define('EDGE_LENGTH', f'{edge_length:.5}f')
     cl_kernel.set_define('MAX_DENSITY', f'{max_density}')
-    cl_kernel.set_define('MAX_SEARCH_NEIGHBOURS', f'{max_search_neighbours}')
+    cl_kernel.set_define('MAX_SEARCH_NEIGHBOURS', '27')
     cl_kernel.set_define('CELLS_XMAX', f'{grid_dims[0]}')
     cl_kernel.set_define('CELLS_YMAX', f'{grid_dims[1]}')
     cl_kernel.set_define('CELLS_ZMAX', f'{grid_dims[2]}')
