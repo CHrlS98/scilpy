@@ -32,7 +32,9 @@ from scilpy.tracking.utils import add_seeding_options
 from scilpy.tracking.short_tracks import track_short_tracks
 from scilpy.gpuparallel.opencl_utils import have_opencl
 from dipy.tracking.utils import random_seeds_from_mask
+from dipy.tracking.streamlinespeed import compress_streamlines
 from dipy.io.utils import get_reference_info, create_tractogram_header
+from scilpy.io.utils import verify_compression_th
 
 
 EPILOG = """
@@ -78,6 +80,9 @@ def _build_arg_parser():
                    help='Approximate size of GPU batches. [%(default)s]')
     p.add_argument('--save_seeds', action='store_true',
                    help='Save seed positions in data_per_streamline.')
+    p.add_argument('--compress', type=float, default=0.1,
+                   help='Compress streamlines using the given threshold. '
+                        '[%(default)s]')
 
     add_sh_basis_args(p)
     add_overwrite_arg(p)
@@ -99,6 +104,7 @@ def main():
 
     assert_inputs_exist(parser, [args.in_odf, args.in_mask])
     assert_outputs_exist(parser, args, args.out_tractogram)
+    verify_compression_th(args.compress)
 
     odf_sh_img = nib.load(args.in_odf)
     mask = get_data_as_mask(nib.load(args.in_mask))
@@ -135,10 +141,21 @@ def main():
                                             args.batch_size, order,
                                             args.sh_basis)
 
+    # Compress streamlines
+    t0 = perf_counter()
+    filtered_streamlines = streamlines
+    if args.compress:
+        logging.info('Compressing streamlines.')
+        filtered_streamlines = (
+            compress_streamlines(s, args.compress)
+            for s in filtered_streamlines)
+        logging.info('Compression done in {0:.4f}s.'
+                     .format(perf_counter() - t0))
+
     # Save tractogram to file
     t0 = perf_counter()
     data_per_streamlines = {'seeds': lambda: seeds} if args.save_seeds else {}
-    tractogram = LazyTractogram(lambda: streamlines,
+    tractogram = LazyTractogram(lambda: filtered_streamlines,
                                 data_per_streamline=data_per_streamlines,
                                 affine_to_rasmm=odf_sh_img.affine)
 
