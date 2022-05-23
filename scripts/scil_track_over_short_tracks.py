@@ -220,6 +220,9 @@ def main():
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
     sft.to_vox()
     sft.to_corner()
+    if 'seeds' not in sft.data_per_streamline:
+        parser.error('The input tractogram must contain seeds'
+                     ' in data_per_streamline.')
     # st_seeds are (vox, center) but we want them (vox, corner)
     st_seeds = sft.data_per_streamline['seeds'] + 0.5
 
@@ -229,7 +232,6 @@ def main():
     vox_search_radius = args.search_radius / sft.voxel_sizes[0]
     vox_step_size = args.step_size / sft.voxel_sizes[0]
     min_cos_angle = float(np.cos(np.deg2rad(args.theta)))
-    min_cos_angle_init = float(np.cos(np.deg2rad(args.theta_init)))
     max_strl_len = int(args.max_length / args.step_size) + 1
     min_strl_len = int(args.min_length / args.step_size) + 1
 
@@ -242,7 +244,7 @@ def main():
     # create acceleration structure around streamline points
     t0 = perf_counter()
     cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids, grid_dims =\
-        create_accel_struct_from_seeds(st_seeds, st_lengths, vox_search_radius)
+        create_accel_struct_from_seeds(st_seeds, vox_search_radius)
     min_density = int(np.min(cell_st_counts))
     max_density = int(np.max(cell_st_counts))
     logging.info('Created acceleration structure in {0:.2f}s.'
@@ -251,13 +253,6 @@ def main():
                  ' is {1}({2}). Mean density is {3:.2f}.'
                  .format(len(cell_ids), min_density, max_density,
                          np.mean(cell_st_counts)))
-
-    from fury import window, actor
-    s = window.Scene()
-    strl_viz = [sft.streamlines[s] for s in cell_st_ids[:8]]
-    line = actor.line(strl_viz)
-    s.add(line)
-    window.show(s)
 
     # generate seeds
     if args.npv:
@@ -307,9 +302,9 @@ def main():
     cl_kernel.set_define('CELLS_XMAX', f'{grid_dims[0]}')
     cl_kernel.set_define('CELLS_YMAX', f'{grid_dims[1]}')
     cl_kernel.set_define('CELLS_ZMAX', f'{grid_dims[2]}')
+    cl_kernel.set_define('MAX_ST_LEN', f'{int(np.max(st_lengths))}')
     cl_kernel.set_define('MAX_STRL_LEN', f'{max_strl_len}')
     cl_kernel.set_define('MIN_COS_ANGLE', f'{min_cos_angle:.5}f')
-    cl_kernel.set_define('MIN_COS_ANGLE_INIT', f'{min_cos_angle_init:.5}f')
     cl_kernel.set_define('STEP_SIZE', f'{vox_step_size}f')
 
     cl_manager = CLManager(cl_kernel, n_inputs=9, n_outputs=2)
@@ -340,6 +335,7 @@ def main():
         num_pts = output_tracks_len[i]
         if(num_pts >= min_strl_len):
             strl_pts = output_tracks[i*max_strl_len:i*max_strl_len+num_pts]
+            print(strl_pts)  # BUG: Streamline begins and ends with nans
             strl.append(strl_pts[..., :-1])
     logging.info(f'Tracking finished in {perf_counter() - t0:.2f}s.')
 
