@@ -80,7 +80,7 @@ def _build_arg_parser():
                    help='Approximate size of GPU batches. [%(default)s]')
     p.add_argument('--save_seeds', action='store_true',
                    help='Save seed positions in data_per_streamline.')
-    p.add_argument('--compress', type=float, default=0.1,
+    p.add_argument('--compress', type=float,
                    help='Compress streamlines using the given threshold. '
                         '[%(default)s]')
 
@@ -104,7 +104,8 @@ def main():
 
     assert_inputs_exist(parser, [args.in_odf, args.in_mask])
     assert_outputs_exist(parser, args, args.out_tractogram)
-    verify_compression_th(args.compress)
+    if args.compress is not None:
+        verify_compression_th(args.compress)
 
     odf_sh_img = nib.load(args.in_odf)
     mask = get_data_as_mask(nib.load(args.in_mask))
