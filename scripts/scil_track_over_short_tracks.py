@@ -295,7 +295,7 @@ def main():
         .astype(np.float32)
 
     cl_kernel = CLKernel('track_over_tracks', 'tracking',
-                         'track_over_tracks_v2.cl')
+                         'track_over_tracks.cl')
 
     # add compiler definitions
     cl_kernel.set_define('NUM_CELLS', f'{len(cell_ids)}')
