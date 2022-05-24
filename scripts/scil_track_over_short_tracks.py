@@ -33,12 +33,10 @@ def _build_arg_parser():
 
     p.add_argument('--search_radius', type=float, default=1.0,
                    help='Search radius in mm. [%(default)s]')
-    p.add_argument('--bbox_edge_length', type=float, default=1.0,
-                   help='Edge length of bounding box cells. [%(default)s]')
 
     add_seeding_options(p)
-    p.add_argument('--step_size', type=float, default=0.5,
-                   help='Step size in mm. [%(default)s]')
+    p.add_argument('--n_steps', type=int, default=5,
+                   help='Number of steps per iteration. [%(default)s]')
     p.add_argument('--theta', type=float, default=20.0,
                    help='Maximum angle between 2 steps. If more than one value'
                         '\nare given, the maximum angle will be drawn at '
@@ -218,6 +216,13 @@ def main():
 
     t0 = perf_counter()
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
+
+    sft.to_rasmm()  # make sure we are in rasmm to compute step size in mm.
+    step_size = np.linalg.norm(sft.streamlines[0][0] - sft.streamlines[0][1])
+    logging.info('Streamlines have an estimated step size of {0:.2f} mm.'
+                 .format(step_size))
+
+    # set space to vox and corner for tracking.
     sft.to_vox()
     sft.to_corner()
     if 'seeds' not in sft.data_per_streamline:
@@ -229,13 +234,13 @@ def main():
     logging.info('Loaded tractogram containing {0} streamlines in {1:.2f}s.'
                  .format(len(sft.streamlines), perf_counter() - t0))
 
-    vox_search_radius = args.search_radius / sft.voxel_sizes[0]
-    vox_step_size = args.step_size / sft.voxel_sizes[0]
-    min_cos_angle = float(np.cos(np.deg2rad(args.theta)))
-    max_strl_len = int(args.max_length / args.step_size) + 1
-    min_strl_len = int(args.min_length / args.step_size) + 1
-
     st_pts = np.concatenate(sft.streamlines, axis=0)
+
+    vox_search_radius = args.search_radius / sft.voxel_sizes[0]
+    min_cos_angle = float(np.cos(np.deg2rad(args.theta)))
+    max_strl_len = int(args.max_length / step_size) + 1
+    min_strl_len = int(args.min_length / step_size) + 1
+
     st_barycenters = [np.mean(s, axis=0) for s in sft.streamlines]
 
     st_lengths = sft.streamlines._lengths
@@ -272,7 +277,6 @@ def main():
         seeds_count=nb_seeds,
         seed_count_per_voxel=seed_per_vox,
         random_seed=args.rand)
-    # seed_pts = np.tile(seed_pts, (5, 1))
     nb_seeds = len(seed_pts)
     logging.info('Generated {0} seed positions in {1:.2f}s.'
                  .format(nb_seeds, perf_counter() - t0))
@@ -296,7 +300,6 @@ def main():
     # add compiler definitions
     cl_kernel.set_define('NUM_CELLS', f'{len(cell_ids)}')
     cl_kernel.set_define('SEARCH_RADIUS', f'{vox_search_radius:.5}f')
-    # cl_kernel.set_define('EDGE_LENGTH', f'{edge_length:.5}f')
     cl_kernel.set_define('MAX_DENSITY', f'{max_density}')
     cl_kernel.set_define('MAX_SEARCH_NEIGHBOURS', '27')
     cl_kernel.set_define('CELLS_XMAX', f'{grid_dims[0]}')
@@ -304,8 +307,8 @@ def main():
     cl_kernel.set_define('CELLS_ZMAX', f'{grid_dims[2]}')
     cl_kernel.set_define('MAX_ST_LEN', f'{int(np.max(st_lengths))}')
     cl_kernel.set_define('MAX_STRL_LEN', f'{max_strl_len}')
+    cl_kernel.set_define('NUM_STEPS_PER_ITER', f'{int(args.n_steps)}')
     cl_kernel.set_define('MIN_COS_ANGLE', f'{min_cos_angle:.5}f')
-    cl_kernel.set_define('STEP_SIZE', f'{vox_step_size}f')
 
     cl_manager = CLManager(cl_kernel, n_inputs=9, n_outputs=2)
 
@@ -335,7 +338,6 @@ def main():
         num_pts = output_tracks_len[i]
         if(num_pts >= min_strl_len):
             strl_pts = output_tracks[i*max_strl_len:i*max_strl_len+num_pts]
-            print(strl_pts)  # BUG: Streamline begins and ends with nans
             strl.append(strl_pts[..., :-1])
     logging.info(f'Tracking finished in {perf_counter() - t0:.2f}s.')
 

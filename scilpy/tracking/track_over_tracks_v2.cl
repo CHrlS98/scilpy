@@ -14,8 +14,9 @@ NOTES:
 #define CELLS_XMAX 0
 #define CELLS_YMAX 0
 #define CELLS_ZMAX 0
-#define MAX_ST_LEN 10  // maximum short-track length
-#define MAX_STRL_LEN 0  // maximum output streamline length
+#define MAX_ST_LEN 10
+#define MAX_STRL_LEN 0
+#define NUM_STEPS_PER_ITER 10
 #define MIN_COS_ANGLE 0.0f
 #define STEP_SIZE 0.0f
 #define BUNDLING_RADIUS 4.0f
@@ -200,7 +201,6 @@ int get_next_direction(const float4 curr_pos, const float4 prev_dir,
         out_dirs[i_dir] = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
     }
     int out_dirs_len = 0;
-    int debug_n_valid_angle = 0;
 
     // iterate through all valid streamlines
     for(int i_valid_st  = 0; i_valid_st < num_valid_st; ++i_valid_st)
@@ -210,18 +210,19 @@ int get_next_direction(const float4 curr_pos, const float4 prev_dir,
 
         // then we need to test that it is under the maximum curvature threshold
         // using the first direction (second - first points)
-        const float4 first_dir = all_st_points[st_offset + 1]
-                               - all_st_points[st_offset];  // pas normalisee
+        const float3 first_dir = normalize(all_st_points[st_offset + 1].xyz -
+                                           all_st_points[st_offset].xyz);
 
         // deviation angle test
-        if(dot(normalize(first_dir.xyz), prev_dir.xyz) > MIN_COS_ANGLE)
+        if(dot(first_dir, prev_dir.xyz) > MIN_COS_ANGLE)
         {
             // ici on est valid
             // utiliser les points dans le calcul de la trajectoire.
             const int st_length = all_st_lengths[st_id];
-            out_dirs_len = max(st_length, out_dirs_len);
+            const int num_dirs = min(NUM_STEPS_PER_ITER, st_length - 1);
+            out_dirs_len = max(num_dirs, out_dirs_len);
             float4 dir;
-            for(int i_dir = 0; i_dir < st_length - 1; ++i_dir)
+            for(int i_dir = 0; i_dir < num_dirs; ++i_dir)
             {
                 dir = all_st_points[st_offset + 1 + i_dir]
                     - all_st_points[st_offset + i_dir];
@@ -237,9 +238,6 @@ int get_next_direction(const float4 curr_pos, const float4 prev_dir,
         out_dirs[i_dir] /= out_dirs[i_dir].w;
     }
 
-    // const float4 f = {(float)num_neighbours, num_valid_st, out_dirs_len, debug_n_valid_angle};
-    // printf("f4 = %2.2v4hlf\n", f);
-
     return out_dirs_len;
 }
 
@@ -254,8 +252,7 @@ int propagate_line(int num_strl_points, float4 curr_pos,
                    __global const int* all_st_offsets,
                    __global const float4* all_st_points,
                    __global const float4* all_st_barycenters,
-                   uint* rng_state,
-                   __global float4* output_tracks)
+                   uint* rng_state, __global float4* output_tracks)
 {
     bool propagation_can_continue = true;
     while(num_strl_points < MAX_STRL_LEN && propagation_can_continue)
@@ -275,7 +272,7 @@ int propagate_line(int num_strl_points, float4 curr_pos,
                 output_tracks[global_id*MAX_STRL_LEN+num_strl_points] = curr_pos;
                 ++num_strl_points;
             }
-            last_dir = normalize(next_dirs[num_next_dirs - 1]);
+            last_dir.xyz = normalize(next_dirs[num_next_dirs - 1].xyz);
         }
         else
         {
@@ -309,8 +306,8 @@ bool get_init_direction(const float4 seed_pos, uint* rng_state,
         const int rand_id = (int)(rand_val * num_valid_st);
         const int st_id = valid_st[rand_id];
         const int first_pt_id = all_st_offsets[st_id];
-        init_dir[0] = all_st_points[first_pt_id + 1] - all_st_points[first_pt_id];
-        init_dir[0] = normalize(init_dir[0]);
+        init_dir[0].xyz = normalize(all_st_points[first_pt_id + 1].xyz -
+                                    all_st_points[first_pt_id].xyz);
         return true;
     }
     return false;
@@ -353,8 +350,6 @@ __kernel void track_over_tracks(__global const int* cell_ids,
         position, &rng_state, cell_ids, cell_st_counts,
         cell_st_offsets, cell_st_ids, all_st_offsets,
         all_st_points, last_dir);
-
-    // printf("f4 = %2.2v4hlf\n", last_dir[0]);
 
     if(found_init_dir)
     {
