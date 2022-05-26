@@ -13,6 +13,7 @@ import nibabel as nib
 
 from numba import jit
 from dipy.tracking.utils import random_seeds_from_mask
+from dipy.tracking.metrics import length
 from dipy.io.stateful_tractogram import StatefulTractogram
 from dipy.io.streamline import save_tractogram
 from scilpy.io.image import get_data_as_mask
@@ -35,6 +36,8 @@ def _build_arg_parser():
                    help='Search radius in mm. [%(default)s]')
 
     add_seeding_options(p)
+    p.add_argument('--step_size', type=float, default=0.5,
+                   help='Step size in mm. [%(default)s]')
     p.add_argument('--n_steps', type=int, default=5,
                    help='Number of steps per iteration. [%(default)s]')
     p.add_argument('--theta', type=float, default=20.0,
@@ -42,9 +45,7 @@ def _build_arg_parser():
                         '\nare given, the maximum angle will be drawn at '
                         'random\nfrom the distribution for each streamline. '
                         '[%(default)s]')
-    p.add_argument('--theta_init', type=float, default=60.0,
-                   help='Maximum deviation angle for selecting the '
-                        'first tracking direction. [%(default)s]')
+    # filtering options
     p.add_argument('--min_length', type=float, default=20.0,
                    help='Minimum length of the streamline '
                         'in mm. [%(default)s]')
@@ -203,63 +204,7 @@ def create_accel_struct(strl_pts, strl_lengths, edge_length):
     return cell_ids, cell_strl_count, cell_strl_offsets, cell_strl_ids, dims
 
 
-def main():
-    t_init = perf_counter()
-    parser = _build_arg_parser()
-    args = parser.parse_args()
-
-    if args.verbose:
-        logging.basicConfig(level=logging.INFO)
-
-    assert_inputs_exist(parser, [args.in_tractogram, args.in_seed])
-    assert_outputs_exist(parser, args, [args.out_tractogram])
-
-    t0 = perf_counter()
-    sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
-
-    sft.to_rasmm()  # make sure we are in rasmm to compute step size in mm.
-    step_size = np.linalg.norm(sft.streamlines[0][0] - sft.streamlines[0][1])
-    logging.info('Streamlines have an estimated step size of {0:.2f} mm.'
-                 .format(step_size))
-
-    # set space to vox and corner for tracking.
-    sft.to_vox()
-    sft.to_corner()
-    if 'seeds' not in sft.data_per_streamline:
-        parser.error('The input tractogram must contain seeds'
-                     ' in data_per_streamline.')
-    # st_seeds are (vox, center) but we want them (vox, corner)
-    st_seeds = sft.data_per_streamline['seeds'] + 0.5
-
-    logging.info('Loaded tractogram containing {0} streamlines in {1:.2f}s.'
-                 .format(len(sft.streamlines), perf_counter() - t0))
-
-    st_pts = np.concatenate(sft.streamlines, axis=0)
-
-    vox_search_radius = args.search_radius / sft.voxel_sizes[0]
-    min_cos_angle = float(np.cos(np.deg2rad(args.theta)))
-    max_strl_len = int(args.max_length / step_size) + 1
-    min_strl_len = int(args.min_length / step_size) + 1
-
-    st_barycenters = [np.mean(s, axis=0) for s in sft.streamlines]
-
-    st_lengths = sft.streamlines._lengths
-    st_offsets = np.append([0], np.cumsum(st_lengths)[:-1])
-
-    # create acceleration structure around streamline points
-    t0 = perf_counter()
-    cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids, grid_dims =\
-        create_accel_struct_from_seeds(st_seeds, vox_search_radius)
-    min_density = int(np.min(cell_st_counts))
-    max_density = int(np.max(cell_st_counts))
-    logging.info('Created acceleration structure in {0:.2f}s.'
-                 .format(perf_counter() - t0))
-    logging.info('Structure contains {0} cells. Min(max) density '
-                 ' is {1}({2}). Mean density is {3:.2f}.'
-                 .format(len(cell_ids), min_density, max_density,
-                         np.mean(cell_st_counts)))
-
-    # generate seeds
+def generate_seeds(args):
     if args.npv:
         nb_seeds = args.npv
         seed_per_vox = True
@@ -278,24 +223,86 @@ def main():
         seed_count_per_voxel=seed_per_vox,
         random_seed=args.rand)
     nb_seeds = len(seed_pts)
+
     logging.info('Generated {0} seed positions in {1:.2f}s.'
                  .format(nb_seeds, perf_counter() - t0))
+
+    return seed_pts, nb_seeds
+
+
+def main():
+    t_init = perf_counter()
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
+
+    assert_inputs_exist(parser, [args.in_tractogram, args.in_seed])
+    assert_outputs_exist(parser, args, [args.out_tractogram])
+
+    t0 = perf_counter()
+    sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
+
+    # set space to vox and corner for tracking.
+    sft.to_vox()
+    sft.to_corner()
+    if 'seeds' not in sft.data_per_streamline:
+        parser.error('The input tractogram must contain seeds'
+                     ' in data_per_streamline.')
+    # st_seeds are (vox, center) but we want them (vox, corner)
+    st_seeds = sft.data_per_streamline['seeds'] + 0.5
+
+    logging.info('Loaded tractogram containing {0} streamlines in {1:.2f}s.'
+                 .format(len(sft.streamlines), perf_counter() - t0))
+
+    # why are these tracking params here?
+    vox_search_radius = args.search_radius / sft.voxel_sizes[0]
+    vox_step_size = args.step_size / sft.voxel_sizes[0]
+    min_cos_angle = float(np.cos(np.deg2rad(args.theta)))
+    max_strl_num_pts = int(args.max_length / args.step_size) + 1
+    min_strl_num_pts = int(args.min_length / args.step_size) + 1
+
+    st_barycenters = [np.mean(s, axis=0) for s in sft.streamlines]
+
+    st_num_pts = sft.streamlines._lengths
+    st_offsets = np.append([0], np.cumsum(st_num_pts))
+
+    # create acceleration structure around streamline points
+    t0 = perf_counter()
+    cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids, grid_dims =\
+        create_accel_struct_from_seeds(st_seeds, vox_search_radius)
+    max_density = int(np.max(cell_st_counts))
+    logging.info('Created acceleration structure in {0:.2f}s.'
+                 .format(perf_counter() - t0))
+    logging.info('Structure contains {0} cells. Min(max) density '
+                 ' is {1}({2}). Mean density is {3:.2f}.'
+                 .format(len(cell_ids), int(np.min(cell_st_counts)),
+                         max_density, np.mean(cell_st_counts)))
+
+    # generate seeds
+    seed_pts, nb_seeds = generate_seeds(args)
 
     # prepare arrays for gpu
     cell_ids = np.asarray(cell_ids, dtype=np.int32)
     cell_st_counts = np.asarray(cell_st_counts, dtype=np.int32)
     cell_st_offsets = np.asarray(cell_st_offsets, dtype=np.int32)
     cell_st_ids = np.asarray(cell_st_ids, dtype=np.int32)
-    st_lengths = np.asarray(st_lengths, dtype=np.int32)
     st_offsets = np.asarray(st_offsets, dtype=np.int32)
-    st_pts = np.column_stack((st_pts, np.ones(len(st_pts)))).flatten()\
-        .astype(np.float32)
+    st_pts_and_cumlen = np.column_stack(
+        (np.concatenate(sft.streamlines, axis=0),
+         np.concatenate([np.append([0.0], length(s, along=True))
+                         for s in sft.streamlines], axis=0)))\
+        .flatten().astype(np.float32)
     st_barycenters = np.asarray(st_barycenters, dtype=np.float32).flatten()
     seed_pts = np.column_stack((seed_pts, np.ones(len(seed_pts)))).flatten()\
         .astype(np.float32)
 
     cl_kernel = CLKernel('track_over_tracks', 'tracking',
                          'track_over_tracks.cl')
+
+    # maximum short-track length in input
+    max_in_st_num_pts = int(np.max(st_num_pts))
 
     # add compiler definitions
     cl_kernel.set_define('NUM_CELLS', f'{len(cell_ids)}')
@@ -305,28 +312,27 @@ def main():
     cl_kernel.set_define('CELLS_XMAX', f'{grid_dims[0]}')
     cl_kernel.set_define('CELLS_YMAX', f'{grid_dims[1]}')
     cl_kernel.set_define('CELLS_ZMAX', f'{grid_dims[2]}')
-    cl_kernel.set_define('MAX_ST_LEN', f'{int(np.max(st_lengths))}')
-    cl_kernel.set_define('MAX_STRL_LEN', f'{max_strl_len}')
+    cl_kernel.set_define('MAX_IN_ST_LEN', f'{max_in_st_num_pts}')
+    cl_kernel.set_define('MAX_OUT_STRL_LEN', f'{max_strl_num_pts}')
+    cl_kernel.set_define('STEP_SIZE', f'{vox_step_size:.5}f')
     cl_kernel.set_define('NUM_STEPS_PER_ITER', f'{int(args.n_steps)}')
     cl_kernel.set_define('MIN_COS_ANGLE', f'{min_cos_angle:.5}f')
 
-    cl_manager = CLManager(cl_kernel, n_inputs=9, n_outputs=2)
+    cl_manager = CLManager(cl_kernel, n_inputs=8, n_outputs=2)
 
     # inputs
-    cl_manager.add_input_buffer(0, cell_ids, dtype=cell_ids.dtype)
-    cl_manager.add_input_buffer(1, cell_st_counts, dtype=cell_st_counts.dtype)
-    cl_manager.add_input_buffer(2, cell_st_offsets, dtype=cell_st_offsets.dtype)
-    cl_manager.add_input_buffer(3, cell_st_ids, dtype=cell_st_ids.dtype)
-    cl_manager.add_input_buffer(4, st_lengths, dtype=st_lengths.dtype)
-    cl_manager.add_input_buffer(5, st_offsets, dtype=st_offsets.dtype)
-    cl_manager.add_input_buffer(6, st_pts, dtype=st_pts.dtype)
-    cl_manager.add_input_buffer(7, st_barycenters, dtype=st_barycenters.dtype)
-    cl_manager.add_input_buffer(8, seed_pts, dtype=seed_pts.dtype)
+    cl_manager.add_input_buffer(0, cell_ids, cell_ids.dtype)
+    cl_manager.add_input_buffer(1, cell_st_counts, cell_st_counts.dtype)
+    cl_manager.add_input_buffer(2, cell_st_offsets, cell_st_offsets.dtype)
+    cl_manager.add_input_buffer(3, cell_st_ids, cell_st_ids.dtype)
+    cl_manager.add_input_buffer(4, st_offsets, st_offsets.dtype)
+    cl_manager.add_input_buffer(5, st_pts_and_cumlen, st_pts_and_cumlen.dtype)
+    cl_manager.add_input_buffer(6, st_barycenters, st_barycenters.dtype)
+    cl_manager.add_input_buffer(7, seed_pts, seed_pts.dtype)
 
     # outputs
-    cl_manager.add_output_buffer(0, (nb_seeds*max_strl_len*4,),
-                                 dtype=np.float32)
-    cl_manager.add_output_buffer(1, (nb_seeds,), dtype=np.int32)
+    cl_manager.add_output_buffer(0, (nb_seeds*max_strl_num_pts*4,), np.float32)
+    cl_manager.add_output_buffer(1, (nb_seeds,), np.int32)
 
     t0 = perf_counter()
     logging.info(f'Launching tracking...')
@@ -336,15 +342,18 @@ def main():
     strl = []
     for i in range(nb_seeds):
         num_pts = output_tracks_len[i]
-        if(num_pts >= min_strl_len):
-            strl_pts = output_tracks[i*max_strl_len:i*max_strl_len+num_pts]
+        if(num_pts >= min_strl_num_pts):
+            strl_pts = output_tracks[
+                i*min_strl_num_pts: i*min_strl_num_pts + num_pts]
             strl.append(strl_pts[..., :-1])
-    logging.info(f'Tracking finished in {perf_counter() - t0:.2f}s.')
+            print(strl[-1])
+    logging.info('Tracked {0} streamlines in {1:.2f}s.'
+                 .format(len(strl), perf_counter() - t0))
 
     logging.info('Saving output tractogram.')
     out_sft = StatefulTractogram.from_sft(strl, sft)
-    out_sft.remove_invalid_streamlines()
-    save_tractogram(out_sft, args.out_tractogram)
+    # out_sft.remove_invalid_streamlines()
+    save_tractogram(out_sft, args.out_tractogram, bbox_valid_check=False)
 
     logging.info('Total runtime: {:.2f}s.'.format(perf_counter() - t_init))
 
