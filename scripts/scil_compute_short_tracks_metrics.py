@@ -5,8 +5,13 @@ import numpy as np
 from scilpy.io.streamlines import load_tractogram_with_reference
 from dipy.io.streamline import save_tractogram
 from dipy.tracking.streamlinespeed import compress_streamlines
+from dipy.io.stateful_tractogram import StatefulTractogram
+from dipy.tracking.metrics import length
+from scilpy.tracking.tools import resample_streamlines_step_size
+from scilpy.io.utils import (add_overwrite_arg, add_reference_arg,
+                             assert_inputs_exist, assert_outputs_exist)
 
-from scilpy.io.utils import add_overwrite_arg, add_reference_arg, assert_inputs_exist, assert_outputs_exist
+from fury import window, actor
 
 
 def _build_arg_parser():
@@ -33,29 +38,81 @@ def hermite_interpolation(p0, p1, m0, m1):
     return h00*p0 + h10*m0 + h01*p1 + h11*m1
 
 
+def resample(strl, step_size):
+    resampled_strl = [strl[0]]
+    print(resampled_strl)
+    print(strl)
+    n_index = 0  # indice of next point on original streamline
+
+    # fonctionne mais il manque la fin de la streamline.
+    can_continue = True
+    on_last_segment = False
+    while can_continue:
+        if n_index == len(strl) - 2:
+            on_last_segment = True
+
+        if not on_last_segment:
+            while np.sum((resampled_strl[-1] - strl[n_index + 1])**2) < step_size:
+                n_index += 1
+        else:  # on_last_segment
+            can_continue = np.sum((strl[-1] - resampled_strl[-1])**2) > step_size
+
+        # le prochain point se trouve sur le segment courant
+        v = strl[n_index+1] - strl[n_index]
+        x0 = strl[n_index]
+        p = resampled_strl[-1]
+        # quadratic equation coefficients
+        a = v[0]**2 + v[1]**2 + v[2]**2
+        b = 2 * (v[0] * x0[0] + v[1] * x0[1] + v[2] * x0[2] -
+                 p[0] * v[0] - p[1] * v[1] - p[2] * v[2])
+        c = x0[0]**2 + x0[1]**2 + x0[2]**2 - 2 * p[0] * x0[0]\
+            - 2 * p[1] * x0[1] - 2 * p[2] * x0[2]\
+            + p[0]**2 + p[1]**2 + p[2]**2 - step_size**2
+        # solve quadratic equation
+        t = (-b + np.sqrt(b**2 - 4 * a * c)) / (2 * a)
+        resampled_strl.append(x0 + t * v)
+
+    length_resampled = length(resampled_strl, True)
+    print(length_resampled[1:] - length_resampled[:-1])
+    return resampled_strl
+
+
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
     assert_inputs_exist(parser, [args.in_tractogram])
 
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
-    # interp = []
-    # for s in sft.streamlines:
-    #     p0 = np.reshape(s[0], (1, 3))
-    #     p1 = np.reshape(s[-1], (1, 3))
-    #     m0 = np.reshape(s[1] - s[0], (1, 3))
-    #     m1 = np.reshape(s[-1] - s[-2], (1, 3))
-    #     m0 /= np.linalg.norm(m0)
-    #     m1 /= np.linalg.norm(m1)
-    #     interp.append(hermite_interpolation(p0, p1, m0, m1))
 
-    compressed = compress_streamlines(sft.streamlines, 0.1)
-    from fury import window, actor
+    strl_i = 4
+    step = 2.0
+
+    strl = sft.streamlines[strl_i:strl_i+1]
+
+    compressed = compress_streamlines(strl, 0.1)
+    compressed_sft = StatefulTractogram.from_sft(compressed, sft)
+
+    resampled = [resample(compressed[0], step)]
+    resampled_scilpy = resample_streamlines_step_size(compressed_sft, step)
+    strl_resampled_scilpy = resampled_scilpy.streamlines[0:1]
+    length_resampled = length(strl_resampled_scilpy[0], True)
+    print(length_resampled[1:] - length_resampled[:-1])
+
+    resampled_scilpy_a = actor.line(strl_resampled_scilpy, colors=(1, 1, 0))
+    resampled_scilpy_dots = actor.dots(np.asarray(strl_resampled_scilpy[0]),
+                                       color=(1, 1, 0))
+
+    resampled_a = actor.line(resampled, colors=(1, 0, 0))
+    resampled_dots = actor.dots(np.asarray(resampled[0]))
+
+    # compressed_a = actor.line(compressed, colors=(0, 1, 0), opacity=0.5)
     s = window.Scene()
-    line_a = actor.line(sft.streamlines, opacity=0.5)
-    interp_a = actor.line(compressed)
-    s.add(interp_a)
-    s.add(line_a)
+    s.add(resampled_scilpy_a)
+    s.add(resampled_scilpy_dots)
+    # s.add(compressed_a)
+    s.add(resampled_a)
+    s.add(resampled_dots)
+    # s.add(line_a)
     window.show(s)
 
 
