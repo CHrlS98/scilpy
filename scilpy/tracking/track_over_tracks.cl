@@ -255,10 +255,15 @@ int get_next_directions(const float4 curr_pos, const float4 prev_dir,
     }
 
     // iterate through all valid streamlines
+    // start from random offset
+    rand_xorshift(rng_state);
+    const float rand_val = (float)rng_state[0] / (float)UINT_MAX;
+    const int rand_offset = (int)(rand_val * num_valid_st);
+
     int num_st_in_avg = 0;
     for(int i_valid_st  = 0; i_valid_st < num_valid_st; ++i_valid_st)
     {
-        const int st_id = valid_st[i_valid_st];
+        const int st_id = valid_st[(rand_offset + i_valid_st) % num_valid_st];
         const int st_offset = all_st_offsets[st_id];
 
         // then we need to test that it is under the maximum curvature threshold
