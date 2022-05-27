@@ -41,10 +41,7 @@ def _build_arg_parser():
     p.add_argument('--n_steps', type=int, default=5,
                    help='Number of steps per iteration. [%(default)s]')
     p.add_argument('--theta', type=float, default=20.0,
-                   help='Maximum angle between 2 steps. If more than one value'
-                        '\nare given, the maximum angle will be drawn at '
-                        'random\nfrom the distribution for each streamline. '
-                        '[%(default)s]')
+                   help='Maximum angle between 2 steps. [%(default)s]')
     # filtering options
     p.add_argument('--min_length', type=float, default=20.0,
                    help='Minimum length of the streamline '
@@ -54,6 +51,8 @@ def _build_arg_parser():
                         'in mm. [%(default)s]')
     p.add_argument('--rand', type=int, default=1234,
                    help='Random seed for tracking seeds. [%(default)s]')
+    p.add_argument('--batch_size', type=int, default=30000,
+                   help='Batch size for GPU parallelization. [%(default)s]')
 
     add_reference_arg(p)
     add_overwrite_arg(p)
@@ -331,6 +330,7 @@ def main():
 
     t0 = perf_counter()
     logging.info(f'Launching tracking...')
+    # TODO: Batch size
     output_tracks, output_tracks_len = cl_manager.run((nb_seeds, 1, 1))
     output_tracks = np.asarray(output_tracks).reshape((-1, 4))
 
@@ -346,7 +346,7 @@ def main():
 
     logging.info('Saving output tractogram.')
     out_sft = StatefulTractogram.from_sft(strl, sft)
-    # out_sft.remove_invalid_streamlines()
+    out_sft.remove_invalid_streamlines()
     save_tractogram(out_sft, args.out_tractogram, bbox_valid_check=False)
 
     logging.info('Total runtime: {:.2f}s.'.format(perf_counter() - t_init))

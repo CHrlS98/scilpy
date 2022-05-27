@@ -232,8 +232,7 @@ int get_valid_trajectories(const float4 last_pos, const int num_neighbours, cons
 }
 
 
-// get next directions, already scaled by step_size
-int get_next_direction(const float4 curr_pos, const float4 prev_dir,
+int get_next_directions(const float4 curr_pos, const float4 prev_dir,
                        __global const int* cell_ids, __global const int* cell_st_counts,
                        __global const int* cell_st_offsets, __global const int* cell_st_ids,
                        __global const int* all_st_offsets, __global const float4* all_st_points,
@@ -256,6 +255,7 @@ int get_next_direction(const float4 curr_pos, const float4 prev_dir,
     }
 
     // iterate through all valid streamlines
+    int num_st_in_avg = 0;
     for(int i_valid_st  = 0; i_valid_st < num_valid_st; ++i_valid_st)
     {
         const int st_id = valid_st[i_valid_st];
@@ -269,37 +269,40 @@ int get_next_direction(const float4 curr_pos, const float4 prev_dir,
         // deviation angle test
         if(dot(first_dir, prev_dir.xyz) > MIN_COS_ANGLE)
         {
-            // utiliser les points dans le calcul de la trajectoire.
             const int st_length = get_length_from_offset(st_id, all_st_offsets);
-
-            // tentative resampled short-track num_points
-            int resampled_st_num_pts = min(NUM_STEPS_PER_ITER + 1, st_length);
 
             // resample st with constant step_size
             float4 resampled_st[NUM_STEPS_PER_ITER + 1];
 
-            // this could stop before reaching resampled_st_num_pts if the s_t is short.
-            resampled_st_num_pts = resample_st(all_st_points, st_offset,
-                                               st_length, STEP_SIZE,
-                                               resampled_st_num_pts,
-                                               resampled_st);
+            int resampled_st_num_pts = out_dirs_len > 0 ? out_dirs_len + 1: NUM_STEPS_PER_ITER + 1;
+            resampled_st_num_pts = resample_st(all_st_points, st_offset, st_length, STEP_SIZE,
+                                               resampled_st_num_pts, resampled_st);
 
-            out_dirs_len = max(resampled_st_num_pts - 1, out_dirs_len);
+            // number of output directions
+            if (num_st_in_avg == 0)
+            {
+                out_dirs_len = resampled_st_num_pts - 1;
+            }
 
             float4 dir;
-            for(int i_dir = 0; i_dir < resampled_st_num_pts - 1; ++i_dir)
+            float weight, cos_sim;
+            for(int i_dir = 0; i_dir < min(out_dirs_len, resampled_st_num_pts -1); ++i_dir)
             {
-                dir = resampled_st[1 + i_dir] - resampled_st[i_dir];
-                dir.w = 1.0f;
-                out_dirs[i_dir] += dir;
+                dir.xyz = normalize(resampled_st[1 + i_dir].xyz - resampled_st[i_dir].xyz);
+                dir.w = 0.0f;  // make sure the 4th dimension stays zero
+
+                cos_sim = num_st_in_avg > 0 ? dot(dir.xyz, normalize(out_dirs[i_dir].xyz)) : 0.0f;
+                weight = num_st_in_avg > 0 ? (cos_sim > 0.0f ? cos_sim : 0.0f) : 1.0f;
+                out_dirs[i_dir] += weight * dir;
             }
+            ++num_st_in_avg;
         }
     }
 
-    // "normalize" directions
+    // normalize directions
     for(int i_dir = 0; i_dir < out_dirs_len; ++i_dir)
     {
-        out_dirs[i_dir] /= out_dirs[i_dir].w;
+        out_dirs[i_dir] = normalize(out_dirs[i_dir]);
     }
 
     return out_dirs_len;
@@ -320,7 +323,7 @@ int propagate_line(int num_strl_points, float4 curr_pos,
     while(num_strl_points < MAX_OUT_STRL_LEN && propagation_can_continue)
     {
         float4 next_dirs[NUM_STEPS_PER_ITER];
-        const int num_next_dirs = get_next_direction(
+        const int num_next_dirs = get_next_directions(
             curr_pos, last_dir, cell_ids, cell_st_counts,
             cell_st_offsets, cell_st_ids, all_st_offsets,
             all_st_points, rng_state, next_dirs);
@@ -329,11 +332,18 @@ int propagate_line(int num_strl_points, float4 curr_pos,
         {
             for(int i_dir = 0; i_dir < num_next_dirs && num_strl_points < MAX_OUT_STRL_LEN; ++i_dir)
             {
-                curr_pos = curr_pos + next_dirs[i_dir];
-                output_tracks[global_id*MAX_OUT_STRL_LEN+num_strl_points] = curr_pos;
-                ++num_strl_points;
+                if(dot(next_dirs[i_dir].xyz, last_dir.xyz) > MIN_COS_ANGLE)
+                {
+                    curr_pos = curr_pos + STEP_SIZE * next_dirs[i_dir];
+                    output_tracks[global_id*MAX_OUT_STRL_LEN+num_strl_points] = curr_pos;
+                    last_dir.xyz = normalize(next_dirs[i_dir].xyz);
+                    ++num_strl_points;
+                }
+                else
+                {
+                    break;
+                }
             }
-            last_dir.xyz = normalize(next_dirs[num_next_dirs - 1].xyz);
         }
         else
         {
