@@ -263,8 +263,6 @@ def main():
     max_strl_num_pts = int(args.max_length / args.step_size) + 1
     min_strl_num_pts = int(args.min_length / args.step_size) + 1
 
-    st_barycenters = [np.mean(s, axis=0) for s in sft.streamlines]
-
     st_num_pts = sft.streamlines._lengths
     st_offsets = np.append([0], np.cumsum(st_num_pts))
 
@@ -283,18 +281,16 @@ def main():
     # generate seeds
     seed_pts, nb_seeds = generate_seeds(args)
 
+    st_pts = np.concatenate(sft.streamlines, axis=0)
+
     # prepare arrays for gpu
     cell_ids = np.asarray(cell_ids, dtype=np.int32)
     cell_st_counts = np.asarray(cell_st_counts, dtype=np.int32)
     cell_st_offsets = np.asarray(cell_st_offsets, dtype=np.int32)
     cell_st_ids = np.asarray(cell_st_ids, dtype=np.int32)
     st_offsets = np.asarray(st_offsets, dtype=np.int32)
-    st_pts_and_cumlen = np.column_stack(
-        (np.concatenate(sft.streamlines, axis=0),
-         np.concatenate([np.append([0.0], length(s, along=True))
-                         for s in sft.streamlines], axis=0)))\
+    st_pts = np.column_stack((st_pts, np.ones(len(st_pts))))\
         .flatten().astype(np.float32)
-    st_barycenters = np.asarray(st_barycenters, dtype=np.float32).flatten()
     seed_pts = np.column_stack((seed_pts, np.ones(len(seed_pts)))).flatten()\
         .astype(np.float32)
 
@@ -318,7 +314,7 @@ def main():
     cl_kernel.set_define('NUM_STEPS_PER_ITER', f'{int(args.n_steps)}')
     cl_kernel.set_define('MIN_COS_ANGLE', f'{min_cos_angle:.5}f')
 
-    cl_manager = CLManager(cl_kernel, n_inputs=8, n_outputs=2)
+    cl_manager = CLManager(cl_kernel, n_inputs=7, n_outputs=2)
 
     # inputs
     cl_manager.add_input_buffer(0, cell_ids, cell_ids.dtype)
@@ -326,9 +322,8 @@ def main():
     cl_manager.add_input_buffer(2, cell_st_offsets, cell_st_offsets.dtype)
     cl_manager.add_input_buffer(3, cell_st_ids, cell_st_ids.dtype)
     cl_manager.add_input_buffer(4, st_offsets, st_offsets.dtype)
-    cl_manager.add_input_buffer(5, st_pts_and_cumlen, st_pts_and_cumlen.dtype)
-    cl_manager.add_input_buffer(6, st_barycenters, st_barycenters.dtype)
-    cl_manager.add_input_buffer(7, seed_pts, seed_pts.dtype)
+    cl_manager.add_input_buffer(5, st_pts, st_pts.dtype)
+    cl_manager.add_input_buffer(6, seed_pts, seed_pts.dtype)
 
     # outputs
     cl_manager.add_output_buffer(0, (nb_seeds*max_strl_num_pts*4,), np.float32)
@@ -344,9 +339,8 @@ def main():
         num_pts = output_tracks_len[i]
         if(num_pts >= min_strl_num_pts):
             strl_pts = output_tracks[
-                i*min_strl_num_pts: i*min_strl_num_pts + num_pts]
+                i*max_strl_num_pts: i*max_strl_num_pts + num_pts]
             strl.append(strl_pts[..., :-1])
-            print(strl[-1])
     logging.info('Tracked {0} streamlines in {1:.2f}s.'
                  .format(len(strl), perf_counter() - t0))
 

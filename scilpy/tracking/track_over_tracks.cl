@@ -19,7 +19,6 @@ NOTES:
 #define NUM_STEPS_PER_ITER 10
 #define STEP_SIZE 0.0f
 #define MIN_COS_ANGLE 0.0f
-#define BUNDLING_RADIUS 4.0f
 
 const int4 CELLS_GRID_DIMS = {CELLS_XMAX, CELLS_YMAX, CELLS_ZMAX, 0};
 
@@ -39,17 +38,17 @@ float normal_dist(float x, float mu, float sigma)
 }
 
 
-int resample_st(__global const float4* original_st, const int st_num_pts,
-                const float step_size, const int resampled_st_max_count,
-                float4* resampled_st)
+int resample_st(__global const float4* all_st_points, const int st_offset,
+                const int st_num_pts, const float step_size,
+                const int resampled_st_max_count, float4* resampled_st)
 {
     // resampled_st contains at most NUM_STEPS_PER_ITER points
     // first point on resampled short-track is the first point
     // on the original short-track
-    resampled_st[0] = original_st[0];
+    int current_index = st_offset;
+    resampled_st[0] = all_st_points[current_index];
     int num_resampled_pts = 1;
 
-    int current_index = 0;
     bool can_continue = true;
     bool is_last_segment = false;
     while(can_continue && num_resampled_pts < resampled_st_max_count)
@@ -59,7 +58,7 @@ int resample_st(__global const float4* original_st, const int st_num_pts,
         if(!is_last_segment)
         {
             while(distance(resampled_st[num_resampled_pts-1].xyz,
-                           original_st[current_index+1].xyz) < step_size)
+                           all_st_points[current_index+1].xyz) < step_size)
             {
                 ++current_index;
             }
@@ -67,13 +66,13 @@ int resample_st(__global const float4* original_st, const int st_num_pts,
         else
         {
             can_continue = distance(
-                original_st[st_num_pts - 1].xyz,
+                all_st_points[st_offset + st_num_pts - 1].xyz,
                 resampled_st[num_resampled_pts - 1].xyz) > step_size;
         }
 
-        const float3 v = original_st[current_index+1].xyz
-                       - original_st[current_index].xyz;
-        const float3 x0 = original_st[current_index].xyz;
+        const float3 v = all_st_points[current_index+1].xyz
+                       - all_st_points[current_index].xyz;
+        const float3 x0 = all_st_points[current_index].xyz;
         const float3 p = resampled_st[num_resampled_pts - 1].xyz;
 
         // quadratic equation coefficients
@@ -87,6 +86,7 @@ int resample_st(__global const float4* original_st, const int st_num_pts,
         const float t = (-b + sqrt(b*b - 4.0f*a*c))/(2.0f*a);
         resampled_st[num_resampled_pts++].xyz = x0 + t*v;
     }
+
     return num_resampled_pts;
 }
 
@@ -232,16 +232,12 @@ int get_valid_trajectories(const float4 last_pos, const int num_neighbours, cons
 }
 
 
-// Commencer avec *PAS COMPRESSES* et *JUSTE ANGLE THRESHOLD*.
-// UTILISER *TRAJECTOIRES* AU LIEU DE *DIRECTION*.
-
-// TODO: Ça va changer parce que nos points candidats sont toujours les premiers des streamlines.
-// Ou pas selon si la streamline est flipped. Check à faire possiblement au niveau CPU.
+// get next directions, already scaled by step_size
 int get_next_direction(const float4 curr_pos, const float4 prev_dir,
                        __global const int* cell_ids, __global const int* cell_st_counts,
                        __global const int* cell_st_offsets, __global const int* cell_st_ids,
                        __global const int* all_st_offsets, __global const float4* all_st_points,
-                       __global const float4* all_st_barycenters, uint* rng_state, float4* out_dirs)
+                       uint* rng_state, float4* out_dirs)
 {
     int neighbour_cells[MAX_SEARCH_NEIGHBOURS];
     const int num_neighbours = search_neighbours(curr_pos, neighbour_cells);
@@ -253,11 +249,11 @@ int get_next_direction(const float4 curr_pos, const float4 prev_dir,
         valid_st);
 
     // zero-fill trajectory_weights array
-    for(int i_dir = 0; i_dir < MAX_IN_ST_LEN - 1; ++i_dir)
+    int out_dirs_len = 0;
+    for(int i_dir = 0; i_dir < NUM_STEPS_PER_ITER; ++i_dir)
     {
         out_dirs[i_dir] = (float4)(0.0f, 0.0f, 0.0f, 0.0f);
     }
-    int out_dirs_len = 0;
 
     // iterate through all valid streamlines
     for(int i_valid_st  = 0; i_valid_st < num_valid_st; ++i_valid_st)
@@ -276,16 +272,22 @@ int get_next_direction(const float4 curr_pos, const float4 prev_dir,
             // utiliser les points dans le calcul de la trajectoire.
             const int st_length = get_length_from_offset(st_id, all_st_offsets);
 
-            // TODO: Resample short-track
-            // Pour avoir NUM_STEPS_PER_ITER directions faudra que j'aie NUM_STEPS_PER_ITER + 1
+            // tentative resampled short-track num_points
+            int resampled_st_num_pts = min(NUM_STEPS_PER_ITER + 1, st_length);
+
+            // resample st with constant step_size
             float4 resampled_st[NUM_STEPS_PER_ITER + 1];
-            const int resampled_st_count =
-                resample_st(&all_st_points[st_offset], st_length, STEP_SIZE,
-                            NUM_STEPS_PER_ITER + 1, resampled_st);
-            out_dirs_len = max(resampled_st_count - 1, out_dirs_len);
+
+            // this could stop before reaching resampled_st_num_pts if the s_t is short.
+            resampled_st_num_pts = resample_st(all_st_points, st_offset,
+                                               st_length, STEP_SIZE,
+                                               resampled_st_num_pts,
+                                               resampled_st);
+
+            out_dirs_len = max(resampled_st_num_pts - 1, out_dirs_len);
 
             float4 dir;
-            for(int i_dir = 0; i_dir < resampled_st_count - 1; ++i_dir)
+            for(int i_dir = 0; i_dir < resampled_st_num_pts - 1; ++i_dir)
             {
                 dir = resampled_st[1 + i_dir] - resampled_st[i_dir];
                 dir.w = 1.0f;
@@ -312,18 +314,16 @@ int propagate_line(int num_strl_points, float4 curr_pos,
                    __global const int* cell_st_ids,
                    __global const int* all_st_offsets,
                    __global const float4* all_st_points,
-                   __global const float4* all_st_barycenters,
                    uint* rng_state, __global float4* output_tracks)
 {
     bool propagation_can_continue = true;
     while(num_strl_points < MAX_OUT_STRL_LEN && propagation_can_continue)
     {
-        float4 next_dirs[MAX_IN_ST_LEN - 1];
+        float4 next_dirs[NUM_STEPS_PER_ITER];
         const int num_next_dirs = get_next_direction(
             curr_pos, last_dir, cell_ids, cell_st_counts,
             cell_st_offsets, cell_st_ids, all_st_offsets,
-            all_st_points, all_st_barycenters, rng_state,
-            next_dirs);
+            all_st_points, rng_state, next_dirs);
 
         if(num_next_dirs > 0)
         {
@@ -395,7 +395,6 @@ __kernel void track_over_tracks(__global const int* cell_ids,
                                 __global const int* cell_st_ids,
                                 __global const int* all_st_offsets,
                                 __global const float4* all_st_points,
-                                __global const float4* all_st_barycenters,
                                 __global const float4* seed_points,
                                 __global float4* output_tracks,
                                 __global int* output_tracks_len)
@@ -418,8 +417,7 @@ __kernel void track_over_tracks(__global const int* cell_ids,
         num_strl_points = propagate_line(
             1, seed_points[global_id], last_dir[0], global_id,
             cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-            all_st_offsets, all_st_points, all_st_barycenters,
-            &rng_state, output_tracks);
+            all_st_offsets, all_st_points, &rng_state, output_tracks);
 
         // if the number of point is smaller than MAX_OUT_STRL_LEN,
         // we can perform backward tracking.
@@ -440,8 +438,7 @@ __kernel void track_over_tracks(__global const int* cell_ids,
             num_strl_points = propagate_line(
                 num_strl_points, seed_points[global_id], last_dir[0], global_id,
                 cell_ids, cell_st_counts, cell_st_offsets, cell_st_ids,
-                all_st_offsets, all_st_points, all_st_barycenters,
-                &rng_state, output_tracks);
+                all_st_offsets, all_st_points, &rng_state, output_tracks);
         }
     }
     output_tracks_len[global_id] = num_strl_points;
