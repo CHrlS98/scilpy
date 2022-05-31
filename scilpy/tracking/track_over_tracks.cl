@@ -53,21 +53,26 @@ int resample_st(__global const float4* all_st_points, const int st_offset,
     bool is_last_segment = false;
     while(can_continue && num_resampled_pts < resampled_st_max_count)
     {
-        // determine on what segment is the next resampled point
-        is_last_segment = num_resampled_pts == st_num_pts - 2;
+        // NEEDS TESTING: This condition might not work!
+        if(current_index == st_offset + st_num_pts - 2)
+        {
+            // once toggled to true, won't go back to false.
+            is_last_segment = true;
+        }
+
         if(!is_last_segment)
         {
             while(distance(resampled_st[num_resampled_pts-1].xyz,
                            all_st_points[current_index+1].xyz) < step_size)
             {
+                // gives indice of last point included inside step_size.
                 ++current_index;
             }
         }
         else
         {
-            can_continue = distance(
-                all_st_points[st_offset + st_num_pts - 1].xyz,
-                resampled_st[num_resampled_pts - 1].xyz) > step_size;
+            can_continue = distance(all_st_points[st_offset + st_num_pts - 1].xyz,
+                                    resampled_st[num_resampled_pts - 1].xyz) > step_size;
         }
 
         const float3 v = all_st_points[current_index+1].xyz
@@ -346,6 +351,8 @@ int propagate_line(int num_strl_points, float4 curr_pos,
                 }
                 else
                 {
+                    // if there has been at last one valid direction, propagation can continue.
+                    propagation_can_continue = i_dir > 0;
                     break;
                 }
             }
