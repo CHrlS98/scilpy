@@ -51,7 +51,7 @@ def _build_arg_parser():
                         'in mm. [%(default)s]')
     p.add_argument('--rand', type=int, default=1234,
                    help='Random seed for tracking seeds. [%(default)s]')
-    p.add_argument('--batch_size', type=int, default=30000,
+    p.add_argument('--batch_size', type=int, default=5000,
                    help='Batch size for GPU parallelization. [%(default)s]')
 
     add_reference_arg(p)
@@ -281,6 +281,8 @@ def main():
     seed_pts, nb_seeds = generate_seeds(args)
 
     st_pts = np.concatenate(sft.streamlines, axis=0)
+    logging.info('All streamlines points size: {0} bytes.'
+                 .format(st_pts.nbytes))
 
     # prepare arrays for gpu
     cell_ids = np.asarray(cell_ids, dtype=np.int32)
@@ -330,24 +332,45 @@ def main():
 
     t0 = perf_counter()
     logging.info(f'Launching tracking...')
-    # TODO: Batch size
-    output_tracks, output_tracks_len = cl_manager.run((nb_seeds, 1, 1))
-    output_tracks = np.asarray(output_tracks).reshape((-1, 4))
 
+    # divide seeds into batches
+    seed_pts = np.array_split(seed_pts, np.ceil(len(seed_pts)/args.batch_size))
+
+    # track each batch
     strl = []
-    for i in range(nb_seeds):
-        num_pts = output_tracks_len[i]
-        if(num_pts >= min_strl_num_pts):
-            strl_pts = output_tracks[
-                i*max_strl_num_pts: i*max_strl_num_pts + num_pts]
-            strl.append(strl_pts[..., :-1])
+    for i, seed_batch in enumerate(seed_pts):
+        logging.info(f'Tracking batch {i+1}/{len(seed_pts)}...')
+
+        # current batch size is the number of seeds in the batch
+        current_batch_size = len(seed_batch)
+        # update seeds
+        cl_manager.add_input_buffer(6, seed_batch)
+
+        # generate output buffers with right size
+        cl_manager.add_output_buffer(
+            0, (current_batch_size*max_strl_num_pts*4,), np.float32)
+        cl_manager.add_output_buffer(1, (current_batch_size,), np.int32)
+
+        # launch kernel
+        output_tracks, output_tracks_len =\
+            cl_manager.run((current_batch_size, 1, 1))
+        output_tracks = np.asarray(output_tracks).reshape((-1, 4))
+
+        # copy tracks to cpu
+        for k in range(current_batch_size):
+            num_pts = output_tracks_len[k]
+            if(num_pts >= min_strl_num_pts):
+                strl_pts = output_tracks[
+                    k*max_strl_num_pts: k*max_strl_num_pts + num_pts]
+                strl.append(strl_pts[..., :-1])
+
     logging.info('Tracked {0} streamlines in {1:.2f}s.'
                  .format(len(strl), perf_counter() - t0))
 
     logging.info('Saving output tractogram.')
     out_sft = StatefulTractogram.from_sft(strl, sft)
     out_sft.remove_invalid_streamlines()
-    save_tractogram(out_sft, args.out_tractogram, bbox_valid_check=False)
+    save_tractogram(out_sft, args.out_tractogram, bbox_valid_check=True)
 
     logging.info('Total runtime: {:.2f}s.'.format(perf_counter() - t_init))
 
