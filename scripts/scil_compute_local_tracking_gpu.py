@@ -112,7 +112,7 @@ def main():
         seed_mask, np.eye(4),
         seeds_count=nb_seeds,
         seed_count_per_voxel=seed_per_vox,
-        random_seed=None) + 0.5
+        random_seed=None)
     logging.info('Generated {0} seed positions in {1:.2f}s.'
                  .format(len(seeds), perf_counter() - t0))
 

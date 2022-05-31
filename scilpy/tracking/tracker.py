@@ -436,7 +436,12 @@ class GPUTacker():
                               'GPU tracker, you need to install it first.')
         self.sh = sh
         self.mask = mask
-        self.seeds = seeds + 0.5  # move to origin center
+
+        # translate seeds to origin corner
+        seeds = seeds + 0.5
+        self.n_seeds = len(seeds)
+        self.seed_batches =\
+            np.array_split(seeds, np.ceil(len(seeds)/batch_size))
         self.step_size = step_size
         self.min_strl_points = min_nbr_pts
         self.max_strl_points = max_nbr_pts
@@ -476,9 +481,6 @@ class GPUTacker():
         n_output_params = 2
         cl_manager = CLManager(cl_kernel, n_input_params, n_output_params)
 
-        seed_batches = np.array_split(
-            self.seeds, np.ceil(len(self.seeds)/self.batch_size))
-
         # Input buffers
         # Constant input buffers
         cl_manager.add_input_buffer(0, self.sh)
@@ -504,7 +506,7 @@ class GPUTacker():
         nb_streamlines = 0
         streamlines = []
         seeds = []
-        for seed_batch in seed_batches:
+        for seed_batch in self.seed_batches:
             # Generate random values for sf sampling
             # TODO: Implement random number generator directly
             #       on the GPU to generate values on-the-fly.
@@ -529,7 +531,7 @@ class GPUTacker():
                     seeds.append(seed - 0.5)
             nb_streamlines += len(seed_batch)
             logging.info('{0:>8}/{1} streamlines generated'
-                         .format(nb_streamlines, len(self.seeds)))
+                         .format(nb_streamlines, self.n_seeds))
 
         logging.info('Tracked {0} streamlines in {1:.2f}s.'
                      .format(len(streamlines), perf_counter() - t0))
