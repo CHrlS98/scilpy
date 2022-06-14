@@ -8,7 +8,7 @@ numerically.
 #define IM_Y_DIM 0
 #define IM_Z_DIM 0
 #define IM_N_COEFFS 0
-#define N_DIRS 0
+#define N_DIRS 1
 
 #define MIN_COS_THETA 0
 #define STEP_SIZE 0
@@ -20,6 +20,13 @@ numerically.
 #define FLOAT_TO_BOOL_EPSILON 0.1f
 #define NULL_SF_EPS 0.0001f
 
+// pseudo random number generator
+void rand_xorshift(uint* rng_state)
+{
+    rng_state[0] ^= (rng_state[0] << 13);
+    rng_state[0] ^= (rng_state[0] >> 17);
+    rng_state[0] ^= (rng_state[0] << 5);
+}
 
 int get_flat_index(const int x, const int y, const int z, const int w,
                    const int xLen, const int yLen, const int zLen)
@@ -28,47 +35,23 @@ int get_flat_index(const int x, const int y, const int z, const int w,
 }
 
 void reverse_streamline(const int num_strl_points,
-                        const int max_num_strl,
-                        const size_t seed_indice,
-                        __global float* output_tracks)
+                        float3* track)
 {
     for(int i = 0; i < (int)(num_strl_points/2); ++i)
     {
-        const size_t headx = get_flat_index(seed_indice, i, 0, 0,
-                                            max_num_strl, MAX_LENGTH, 3);
-        const size_t heady = get_flat_index(seed_indice, i, 1, 0,
-                                            max_num_strl, MAX_LENGTH, 3);
-        const size_t headz = get_flat_index(seed_indice, i, 2, 0,
-                                            max_num_strl, MAX_LENGTH, 3);
-        const size_t tailx = get_flat_index(seed_indice, num_strl_points-i-1, 0,
-                                            0, max_num_strl, MAX_LENGTH, 3);
-        const size_t taily = get_flat_index(seed_indice, num_strl_points-i-1, 1,
-                                            0, max_num_strl, MAX_LENGTH, 3);
-        const size_t tailz = get_flat_index(seed_indice, num_strl_points-i-1, 2,
-                                            0, max_num_strl, MAX_LENGTH, 3);
-        const float3 temp_pt = {output_tracks[headx],
-                                output_tracks[heady],
-                                output_tracks[headz]};
-        output_tracks[headx] = output_tracks[tailx];
-        output_tracks[heady] = output_tracks[taily];
-        output_tracks[headz] = output_tracks[tailz];
-        output_tracks[tailx] = temp_pt.x;
-        output_tracks[taily] = temp_pt.y;
-        output_tracks[tailz] = temp_pt.z;
+        const float3 temp_pt = track[i];
+        track[i] = track[num_strl_points - 1 - i];
+        track[num_strl_points - 1 - i] = temp_pt;
     }
 }
 
 void sh_to_sf(const float* sh_coeffs, __global const float* sh_to_sf_mat,
-              const bool is_first_step, __global const float* vertices,
+              const bool is_first_step, __global const float3* vertices,
               const float3 last_dir, const float max_cos_theta, float* sf_coeffs)
 {
     for(int u = 0; u < N_DIRS; ++u)
     {
-        const float3 vertice = {
-            vertices[get_flat_index(u, 0, 0, 0, N_DIRS, 3, 1)],
-            vertices[get_flat_index(u, 1, 0, 0, N_DIRS, 3, 1)],
-            vertices[get_flat_index(u, 2, 0, 0, N_DIRS, 3, 1)],
-        };
+        const float3 vertice = vertices[u];
 
         // all directions are valid for first step.
         bool is_valid = is_first_step;
@@ -149,44 +132,33 @@ int sample_sf(const float* odf_sf, const float randv)
     return index;
 }
 
-int propagate(float3 last_pos, float3 last_dir, int current_length,
-              const size_t seed_indice, const size_t n_seeds,
-              const float max_cos_theta_local,
+int propagate(float3 last_pos, float3 last_dir,
+              int current_length, uint* rng_state,
               __global const float* tracking_mask,
               __global const float* sh_coeffs,
-              __global const float* rand_f,
-              __global const float* vertices,
+              __global const float3* vertices,
               __global const float* sh_to_sf_mat,
-              __global float* out_streamlines)
+              float3* out_track)
 {
     bool is_valid = is_valid_pos(tracking_mask, last_pos);
     while(current_length < MAX_LENGTH && is_valid)
     {
         // save current streamline position
-        out_streamlines[get_flat_index(seed_indice, current_length, 0, 0,
-                                       n_seeds, MAX_LENGTH, 3)] = last_pos.x;
-        out_streamlines[get_flat_index(seed_indice, current_length, 1, 0,
-                                       n_seeds, MAX_LENGTH, 3)] = last_pos.y;
-        out_streamlines[get_flat_index(seed_indice, current_length, 2, 0,
-                                       n_seeds, MAX_LENGTH, 3)] = last_pos.z;
+        out_track[current_length] = last_pos;
 
         // 2. Sample SF at position.
         float odf_sh[IM_N_COEFFS];
         float odf_sf[N_DIRS];
         get_value_nn(sh_coeffs, IM_N_COEFFS, last_pos, odf_sh);
         sh_to_sf(odf_sh, sh_to_sf_mat, current_length == 0, vertices,
-                 last_dir, max_cos_theta_local, odf_sf);
+                 last_dir, MIN_COS_THETA, odf_sf);
 
-        const float randv = rand_f[get_flat_index(seed_indice, current_length, 0, 0,
-                                                  n_seeds, MAX_LENGTH, 1)];
+        rand_xorshift(rng_state);
+        const float randv = (float)rng_state[0] / (float)UINT_MAX;
         const int vert_indice = sample_sf(odf_sf, randv);
         if(vert_indice > 0)
         {
-            const float3 direction = {
-                vertices[get_flat_index(vert_indice, 0, 0, 0, N_DIRS, 3, 1)],
-                vertices[get_flat_index(vert_indice, 1, 0, 0, N_DIRS, 3, 1)],
-                vertices[get_flat_index(vert_indice, 2, 0, 0, N_DIRS, 3, 1)]
-            };
+            const float3 direction = vertices[vert_indice];
 
             // 3. Try step.
             const float3 next_pos = last_pos + STEP_SIZE * direction;
@@ -203,72 +175,65 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
     return current_length;
 }
 
-__kernel void track(__global const float* sh_coeffs,
-                    __global const float* vertices,
+// TODO: Test tracking before QB implementation.
+__kernel void track(__global const uint3* voxel_ids,
+                    __global const float* sh_coeffs,
+                    __global const float* mask,
                     __global const float* sh_to_sf_mat,
-                    __global const float* tracking_mask,
-                    __global const float* seed_positions,
-                    __global const float* rand_f,
-                    __global const float* max_cos_theta,
-                    __global float* out_streamlines,
-                    __global float* out_nb_points)
+                    __global const float3* vertices,
+                    __global float* out_ftd,
+                    __global uint* out_nb_bundles)
 {
     // 1. Get seed position from global_id.
-    const size_t seed_indice = get_global_id(0);
-    const int n_seeds = get_global_size(0);
-    float max_cos_theta_local = max_cos_theta[0];
+    const size_t global_id = get_global_id(0);
+    const uint3 voxel_id = voxel_ids[global_id];
 
-    const float3 seed_pos = {
-        seed_positions[get_flat_index(seed_indice, 0, 0, 0, n_seeds, 3, 1)],
-        seed_positions[get_flat_index(seed_indice, 1, 0, 0, n_seeds, 3, 1)],
-        seed_positions[get_flat_index(seed_indice, 2, 0, 0, n_seeds, 3, 1)]
-    };
+    uint rng_state = global_id + 1;
 
-    if(N_THETAS > 1) // Varying radius of curvature.
+    // tableau de nseeds_per_vox x max_length float3
+    float3 tracks[N_SEEDS_PER_VOX][MAX_LENGTH];
+    for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
     {
-        // extract random value using fractional part of voxel position
-        // for selecting the max theta for this streamline
-        float itpr;
-        const float rand_v = fract(seed_pos.x+seed_pos.y+seed_pos.z, &itpr);
-        max_cos_theta_local = max_cos_theta[(int)(rand_v * (float)N_THETAS)];
-    }
+        // generate seeding position
+        rand_xorshift(&rng_state);
+        const float xrand = (float)rng_state / (float)UINT_MAX;
+        rand_xorshift(&rng_state);
+        const float yrand = (float)rng_state / (float)UINT_MAX;
+        rand_xorshift(&rng_state);
+        const float zrand = (float)rng_state / (float)UINT_MAX;
+        const float3 seed_pos = {
+            (float)voxel_id.x + xrand,
+            (float)voxel_id.y + yrand,
+            (float)voxel_id.z + zrand
+        };
 
-    float3 last_pos = seed_pos;
-    float3 last_dir;
-    int current_length = 0;
-    // forward track
-    current_length = propagate(last_pos, last_dir, current_length,
-                               seed_indice, n_seeds, max_cos_theta_local,
-                               tracking_mask, sh_coeffs, rand_f, vertices,
-                               sh_to_sf_mat,  out_streamlines);
+        // track from seed position
+        float3 last_pos = seed_pos;
+        float3 last_dir;
+        int current_length = 0;
 
-    // reverse streamline for backward tracking
-    if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
-    {
-        // reset last direction to initial direction
-        last_dir.x = out_streamlines[get_flat_index(seed_indice, 0, 0, 0,
-                                                    n_seeds, MAX_LENGTH, 3)]
-                   - out_streamlines[get_flat_index(seed_indice, 1, 0, 0,
-                                                    n_seeds, MAX_LENGTH, 3)];
-        last_dir.y = out_streamlines[get_flat_index(seed_indice, 0, 1, 0,
-                                                    n_seeds, MAX_LENGTH, 3)]
-                   - out_streamlines[get_flat_index(seed_indice, 1, 1, 0,
-                                                    n_seeds, MAX_LENGTH, 3)];
-        last_dir.z = out_streamlines[get_flat_index(seed_indice, 0, 2, 0,
-                                                    n_seeds, MAX_LENGTH, 3)]
-                   - out_streamlines[get_flat_index(seed_indice, 1, 2, 0,
-                                                    n_seeds, MAX_LENGTH, 3)];
-        last_dir = normalize(last_dir);
-
-        // reverse streamline so the output is continuous
-        reverse_streamline(current_length, n_seeds,
-                           seed_indice, out_streamlines);
-
-        // track backward
+        // forward track
+        // TODO: propagation maximum de 1/2*MAX_LENGTH par direction!
         current_length = propagate(last_pos, last_dir, current_length,
-                                   seed_indice, n_seeds, max_cos_theta_local,
-                                   tracking_mask, sh_coeffs, rand_f, vertices,
-                                   sh_to_sf_mat,  out_streamlines);
+                                   &rng_state, mask, sh_coeffs, vertices,
+                                   sh_to_sf_mat,  &tracks[track_id][0]);
+
+        // reverse streamline for backward tracking
+        if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
+        {
+            // reset last direction to initial direction
+            last_dir = tracks[track_id][0] - tracks[track_id][1];
+            last_dir = normalize(last_dir);
+
+            // reverse streamline so the output is continuous
+            reverse_streamline(current_length, &tracks[track_id][0]);
+
+            // track backward
+            current_length = propagate(last_pos, last_dir, current_length,
+                                   &rng_state, mask, sh_coeffs, vertices,
+                                   sh_to_sf_mat,  &tracks[track_id][0]);
+        }
+        // TODO: Quickbundle ici.
     }
-    out_nb_points[seed_indice] = (float)current_length;
+    // TODO: Un coup qu'on a nos bundles, on calcule une FTD par bundle.
 }

@@ -6,9 +6,8 @@ from dipy.reconst.shm import sh_to_sf_matrix
 from dipy.data import get_sphere
 
 
-def compute_ftd_gpu(fodf, mask, n_seeds_per_vox=500,
-                    step_size=0.5, theta=20.0,
-                    min_nbr_points=10.0, max_nbr_points=20.0,
+def compute_ftd_gpu(fodf, mask, n_seeds_per_vox, step_size, theta,
+                    min_nb_points, max_nb_points,
                     sh_basis='descoteaux07'):
     """
     Compute fiber trajectory distribution from FODF image.
@@ -44,16 +43,20 @@ def compute_ftd_gpu(fodf, mask, n_seeds_per_vox=500,
 
     sh_order, full_basis = get_sh_order_and_fullness(fodf.shape[-1])
     sphere = get_sphere('symmetric724')
-    vertices = sphere.vertices
+    nb_vertices = len(sphere.vertices)
     min_cos_theta = np.cos(np.deg2rad(theta))
-    min_n_points = int(min_length / step_size) + 1
-    max_n_points = int(max_length / step_size) + 1
     B_mat = sh_to_sf_matrix(sphere, sh_order, sh_basis,
                             full_basis, return_inv=False)
 
     # position of voxels inside the mask
+    voxel_ids = np.argwhere(mask).astype(np.float32)
+    nb_voxels = len(voxel_ids)
     # we flatten in order to feed as uint3 to the GPU.
-    voxel_ids = np.argwhere(mask).astype(np.uint32).flatten()
+    voxel_ids = voxel_ids.flatten()
+
+    # we will flatten the sphere vertices for the same reason.
+    # float3 on the GPU.
+    vertices = sphere.vertices.flatten()
 
     cl_kernel = CLKernel('compute_ftd', 'reconst', 'ftd.cl')
     # image dimensions
@@ -61,16 +64,26 @@ def compute_ftd_gpu(fodf, mask, n_seeds_per_vox=500,
     cl_kernel.set_define('IM_Y_DIM', fodf.shape[1])
     cl_kernel.set_define('IM_Z_DIM', fodf.shape[2])
     cl_kernel.set_define('IM_N_COEFFS', fodf.shape[3])
-    cl_kernel.set_define('N_DIRS')
+    cl_kernel.set_define('N_DIRS', f'{nb_vertices}')
     cl_kernel.set_define('N_SEEDS_PER_VOX', f'{n_seeds_per_vox}')
     cl_kernel.set_define('MIN_COS_THETA', '{0:.6f}f'.format(min_cos_theta))
-    cl_kernel.set_define('STEP_SIZE', '{0:.6f}f'.format(step_size))
-    cl_kernel.set_define('MIN_LENGTH', '{0:.6f}f'.format(min_length))
-    cl_kernel.set_define('MAX_LENGTH', '{0:.6f}f'.format(max_length))
+    cl_kernel.set_define('STEP_SIZE', f'{step_size}')
+    cl_kernel.set_define('MIN_LENGTH', f'{min_nb_points}')
+    cl_kernel.set_define('MAX_LENGTH', f'{max_nb_points}')
 
-    N_INPUTS = 3
-    N_OUTPUTS = 1
+    N_INPUTS = 5
+    N_OUTPUTS = 2
     cl_manager = CLManager(cl_kernel, N_INPUTS, N_OUTPUTS)
-    cl_manager.add_input_buffer(0, fodf, np.float32)
-    cl_manager.add_input_buffer(1, voxel_ids, np.uint32)
+    cl_manager.add_input_buffer(0, voxel_ids, np.uint32)
+    cl_manager.add_input_buffer(1, fodf, np.float32)
+    cl_manager.add_input_buffer(2, mask, np.float32)
+    cl_manager.add_input_buffer(3, B_mat, np.float32)
+    cl_manager.add_input_buffer(4, vertices, np.float32)
+
+    # output buffer 0, at most 5 FTD matrices of shape
+    # 3 x 10 per voxel in voxel_ids
+    cl_manager.add_output_buffer(0, (nb_voxels, 3, 10), np.float32)
+    # output buffer 1, one integer between 0 and 5 per voxel
+    # in voxel_ids
+    cl_manager.add_output_buffer(1, (nb_voxels, 1), np.uint32)
     return 0
