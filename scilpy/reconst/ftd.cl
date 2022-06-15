@@ -134,8 +134,8 @@ int sample_sf(const float* odf_sf, const float randv)
     return index;
 }
 
-int propagate(float3 last_pos, float3 last_dir,
-              int current_length, uint* rng_state,
+int propagate(float3 last_pos, float3 last_dir, int current_length,
+              uint* rng_state, bool is_forward,
               __global const float* tracking_mask,
               __global const float* sh_coeffs,
               __global const float4* vertices,
@@ -143,17 +143,15 @@ int propagate(float3 last_pos, float3 last_dir,
               float3* out_track)
 {
     bool is_valid = is_valid_pos(tracking_mask, last_pos);
+    const int max_length = is_forward && !FORWARD_ONLY ? MAX_LENGTH / 2 : MAX_LENGTH;
 
-    while(current_length < MAX_LENGTH && is_valid)
+    while(current_length < max_length && is_valid)
     {
-        // save current streamline position
-        out_track[current_length] = last_pos;
-
         // 2. Sample SF at position.
         float odf_sh[IM_N_COEFFS];
         float odf_sf[N_DIRS];
         get_value_nn(sh_coeffs, IM_N_COEFFS, last_pos, odf_sh);
-        sh_to_sf(odf_sh, sh_to_sf_mat, current_length == 0, vertices,
+        sh_to_sf(odf_sh, sh_to_sf_mat, current_length == 1, vertices,
                  last_dir, MIN_COS_THETA, odf_sf);
 
         rand_xorshift(rng_state);
@@ -173,7 +171,13 @@ int propagate(float3 last_pos, float3 last_dir,
         {
             is_valid = false;
         }
-        ++current_length;
+
+        if(is_valid)
+        {
+            // save current streamline position
+            out_track[current_length] = last_pos;
+            ++current_length;
+        }
     }
     return current_length;
 }
@@ -213,8 +217,7 @@ __kernel void main(__global const float4* voxel_ids,
     // tableau de nseeds_per_vox x max_length float3
     // float3 tracks[N_SEEDS_PER_VOX][MAX_LENGTH];
     float3 tracks[1][MAX_LENGTH];
-    int track_id = 0;
-    for(int i = 0; i < N_SEEDS_PER_VOX; ++i)
+    for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
     {
         // generate seeding position
         rand_xorshift(&rng_state);
@@ -228,18 +231,33 @@ __kernel void main(__global const float4* voxel_ids,
         // track from seed position
         float3 last_pos = seed_pos;
         float3 last_dir;
-        int current_length = 0;
 
-        // TODO: Uncomment for generating bundle
-        track_id = i;
+        // initialize streamline with seed position
+        tracks[0][0] = last_pos;
+        int current_length = 1;
 
         // forward track
         // TODO: propagation maximum de 1/2*MAX_LENGTH par direction!
         current_length = propagate(last_pos, last_dir, current_length,
-                                   &rng_state, mask, sh_coeffs, vertices,
+                                   &rng_state, true, mask, sh_coeffs, vertices,
                                    sh_to_sf_mat,  &tracks[0][0]);
 
         // reverse streamline for backward tracking
+        if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
+        {
+            // reset last direction to initial direction
+            last_dir = tracks[0][0] - tracks[0][1];
+            last_dir = normalize(last_dir);
+
+            // reverse streamline so the output is continuous
+            reverse_streamline(current_length, &tracks[0][0]);
+
+            // track backward
+            current_length = propagate(last_pos, last_dir, current_length,
+                                       &rng_state, false, mask, sh_coeffs,
+                                       vertices, sh_to_sf_mat, &tracks[0][0]);
+        }
+
         copy_track_to_output(&tracks[0][0], global_id, track_id,
                              current_length, out_tracks, out_nb_points);
 
@@ -247,18 +265,3 @@ __kernel void main(__global const float4* voxel_ids,
     }
     // TODO: Un coup qu'on a nos bundles, on calcule une FTD par bundle.
 }
-/*
-if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
-{
-    // reset last direction to initial direction
-    last_dir = tracks[track_id][0] - tracks[track_id][1];
-    last_dir = normalize(last_dir);
-
-    // reverse streamline so the output is continuous
-    reverse_streamline(current_length, &tracks[track_id][0]);
-
-    // track backward
-    current_length = propagate(last_pos, last_dir, current_length,
-                            &rng_state, mask, sh_coeffs, vertices,
-                            sh_to_sf_mat,  &tracks[track_id][0]);
-}*/
