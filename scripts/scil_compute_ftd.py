@@ -16,7 +16,15 @@ def _build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument('in_fodf', help='FODF image.')
+    p.add_argument('in_seeds', help='Seeding mask.')
     p.add_argument('in_mask', help='Input mask.')
+
+    p.add_argument('--step-size', type=float, default=0.5,
+                   help='Step size in mm.')
+    p.add_argument('--min_length', type=float, default=5.0,
+                   help='Minimum length of the streamlines.')
+    p.add_argument('--max_length', type=float, default=20.0,
+                   help='Maximum length of the streamlines.')
 
     add_reference_arg(p)
     return p
@@ -78,12 +86,32 @@ def main():
 
     assert_inputs_exist(parser, [args.in_fodf, args.in_mask])
 
+    # images
     fodf_im = nib.load(args.in_fodf)
     mask_im = nib.load(args.in_mask)
-    voxel_size = fodf_im.header.get_zooms()[0]
+    seeds_im = nib.load(args.in_seeds)
+    fodf = fodf_im.get_fdata(dtype=np.float32)
     mask = get_data_as_mask(mask_im)
-    ftd = compute_ftd_gpu(fodf_im.get_fdata(dtype=np.float32),
-                          mask)
+    seeds = get_data_as_mask(seeds_im)
+
+    # mm to voxel
+    voxel_size = fodf_im.header.get_zooms()[0]
+    vox_step_size = args.step_size / voxel_size
+    min_nb_points = int(args.min_length / args.step_size) + 1
+    max_nb_points = int(args.max_length / args.step_size) + 1
+
+    ftd = compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox=100,
+                          step_size=vox_step_size,
+                          theta=20.0,
+                          min_nb_points=min_nb_points,
+                          max_nb_points=max_nb_points)
+
+    line_a = actor.line(ftd)
+    dots_a = actor.dots(np.concatenate(ftd, axis=0), opacity=0.2)
+    scene = window.Scene()
+    scene.add(line_a)
+    scene.add(dots_a)
+    window.show(scene)
 
 
 def old_fun():

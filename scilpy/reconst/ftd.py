@@ -6,9 +6,9 @@ from dipy.reconst.shm import sh_to_sf_matrix
 from dipy.data import get_sphere
 
 
-def compute_ftd_gpu(fodf, mask, n_seeds_per_vox, step_size, theta,
-                    min_nb_points, max_nb_points,
-                    sh_basis='descoteaux07'):
+def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
+                    step_size, theta, min_nb_points,
+                    max_nb_points, sh_basis='descoteaux07'):
     """
     Compute fiber trajectory distribution from FODF image.
 
@@ -49,32 +49,36 @@ def compute_ftd_gpu(fodf, mask, n_seeds_per_vox, step_size, theta,
                             full_basis, return_inv=False)
 
     # position of voxels inside the mask
-    voxel_ids = np.argwhere(mask).astype(np.float32)
+    voxel_ids = np.argwhere(seeds).astype(np.float32)
     nb_voxels = len(voxel_ids)
-    # we flatten in order to feed as uint3 to the GPU.
-    voxel_ids = voxel_ids.flatten()
+    # we flatten in order to feed as float3 to the GPU.
+    voxel_ids = np.column_stack((voxel_ids, np.ones(nb_voxels)))\
+        .astype(np.float32).flatten()
 
     # we will flatten the sphere vertices for the same reason.
     # float3 on the GPU.
-    vertices = sphere.vertices.flatten()
+    vertices = np.column_stack((sphere.vertices, np.ones(nb_vertices)))\
+        .astype(np.float32).flatten()
 
-    cl_kernel = CLKernel('compute_ftd', 'reconst', 'ftd.cl')
+    cl_kernel = CLKernel('main', 'reconst', 'ftd.cl')
     # image dimensions
     cl_kernel.set_define('IM_X_DIM', fodf.shape[0])
     cl_kernel.set_define('IM_Y_DIM', fodf.shape[1])
     cl_kernel.set_define('IM_Z_DIM', fodf.shape[2])
     cl_kernel.set_define('IM_N_COEFFS', fodf.shape[3])
     cl_kernel.set_define('N_DIRS', f'{nb_vertices}')
+    cl_kernel.set_define('N_VOX', f'{nb_voxels}')
     cl_kernel.set_define('N_SEEDS_PER_VOX', f'{n_seeds_per_vox}')
     cl_kernel.set_define('MIN_COS_THETA', '{0:.6f}f'.format(min_cos_theta))
-    cl_kernel.set_define('STEP_SIZE', f'{step_size}')
+    cl_kernel.set_define('STEP_SIZE', f'{step_size}f')
     cl_kernel.set_define('MIN_LENGTH', f'{min_nb_points}')
     cl_kernel.set_define('MAX_LENGTH', f'{max_nb_points}')
+    cl_kernel.set_define('FORWARD_ONLY', 'true')
 
     N_INPUTS = 5
     N_OUTPUTS = 2
     cl_manager = CLManager(cl_kernel, N_INPUTS, N_OUTPUTS)
-    cl_manager.add_input_buffer(0, voxel_ids, np.uint32)
+    cl_manager.add_input_buffer(0, voxel_ids, np.float32)
     cl_manager.add_input_buffer(1, fodf, np.float32)
     cl_manager.add_input_buffer(2, mask, np.float32)
     cl_manager.add_input_buffer(3, B_mat, np.float32)
@@ -82,8 +86,24 @@ def compute_ftd_gpu(fodf, mask, n_seeds_per_vox, step_size, theta,
 
     # output buffer 0, at most 5 FTD matrices of shape
     # 3 x 10 per voxel in voxel_ids
-    cl_manager.add_output_buffer(0, (nb_voxels, 3, 10), np.float32)
+    # cl_manager.add_output_buffer(0, (nb_voxels, 3, 10), np.float32)
     # output buffer 1, one integer between 0 and 5 per voxel
     # in voxel_ids
-    cl_manager.add_output_buffer(1, (nb_voxels, 1), np.uint32)
-    return 0
+    # cl_manager.add_output_buffer(1, (nb_voxels, 1), np.uint32)
+
+    # Test that tracking works properly
+    cl_manager.add_output_buffer(0, (nb_voxels*n_seeds_per_vox,
+                                     max_nb_points, 3),
+                                 dtype=np.float32)  # out tracks
+    cl_manager.add_output_buffer(1, (nb_voxels*n_seeds_per_vox, 1),
+                                 dtype=np.uint32)  # nb tracks
+    tracks, n_points = cl_manager.run((nb_voxels, 1, 1))
+
+    # unpack valid tracks
+    streamlines = []
+    n_points = n_points.flatten()
+    for i in range(nb_voxels*n_seeds_per_vox):
+        if n_points[i] > min_nb_points:
+            streamlines.append(tracks[i, :n_points[i]])
+
+    return streamlines
