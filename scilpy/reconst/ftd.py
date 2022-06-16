@@ -83,10 +83,11 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
     cl_kernel.set_define('MIN_COS_THETA', '{0:.6f}f'.format(min_cos_theta))
     cl_kernel.set_define('MIN_LENGTH', f'{min_nb_points}')
     cl_kernel.set_define('MAX_LENGTH', f'{max_nb_points}')
+    cl_kernel.set_define('QB_THRESHOLD', '1.5f')
     cl_kernel.set_define('FORWARD_ONLY', 'false')
 
     N_INPUTS = 5
-    N_OUTPUTS = 2
+    N_OUTPUTS = 3
     cl_manager = CLManager(cl_kernel, N_INPUTS, N_OUTPUTS)
     cl_manager.add_input_buffer(0, voxel_ids, np.float32)
     cl_manager.add_input_buffer(1, fodf, np.float32)
@@ -107,16 +108,20 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
                                  dtype=np.float32)  # out tracks
     cl_manager.add_output_buffer(1, (nb_voxels*n_seeds_per_vox, 1),
                                  dtype=np.uint32)  # nb tracks
-    tracks, n_points = cl_manager.run((nb_voxels, 1, 1))
+    cl_manager.add_output_buffer(2, (nb_voxels*n_seeds_per_vox, 1),
+                                 dtype=np.int32)  # cluster id
+    tracks, n_points, cluster_id = cl_manager.run((nb_voxels, 1, 1))
 
     # unpack valid tracks
     streamlines = []
+    cluster_ids = []
     n_points = n_points.flatten()
     for i in range(nb_voxels*n_seeds_per_vox):
         if n_points[i] > min_nb_points:
             streamlines.append(tracks[i, :n_points[i]])
+            cluster_ids.append(np.squeeze(cluster_id[i]))
 
-    return streamlines
+    return streamlines, cluster_ids
 
 
 def _project_to_polynomial(P):

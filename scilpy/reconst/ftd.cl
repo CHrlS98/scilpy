@@ -14,6 +14,8 @@ numerically.
 #define STEP_SIZE 0
 #define N_VOX 0
 #define N_SEEDS_PER_VOX 0
+#define MAX_N_CLUSTERS 5
+#define QB_THRESHOLD 0.0f
 #define MIN_LENGTH 0
 #define MAX_LENGTH 0
 #define FORWARD_ONLY false
@@ -21,6 +23,7 @@ numerically.
 // CONSTANTS
 #define FLOAT_TO_BOOL_EPSILON 0.1f
 #define NULL_SF_EPS 0.0001f
+#define N_RESAMPLE 10
 
 // pseudo random number generator
 void rand_xorshift(uint* rng_state)
@@ -28,6 +31,112 @@ void rand_xorshift(uint* rng_state)
     rng_state[0] ^= (rng_state[0] << 13);
     rng_state[0] ^= (rng_state[0] >> 17);
     rng_state[0] ^= (rng_state[0] << 5);
+}
+
+float3 interp_along_track(const float3* track, const int length, float t)
+{
+    const float t_length = (float)length * t;
+    const int t_int_floor = (int)t_length;
+    if(t_int_floor == 0)
+        return track[0];
+
+    const int t_int_ceil = t_int_floor + 1;
+    if(t_int_ceil > length - 1)
+        return track[length - 1];
+    
+    const float3 p_prev = track[t_int_floor];
+    const float3 p_next = track[t_int_ceil];
+
+    const float r = t_length - floor(t_length);
+    return r*p_next + (1.0f - r)*p_prev;
+}
+
+void resample_track(const float3* in_track,
+                    const int length,
+                    float3* out_track)
+{
+    const float delta_t = 1.0f / (float)(N_RESAMPLE - 1);
+    for (int i = 0; i < N_RESAMPLE; i++)
+    {
+        out_track[i] = interp_along_track(in_track, length, i*delta_t);
+    }
+}
+
+float compute_mdf(const float3* fixed, const float fixed_scale,
+                  float3* flip_candidate, const float flip_scale)
+{
+    float direct = 0.0f;
+    float flipped = 0.0f;
+
+    float3 flipped_track[N_RESAMPLE];
+    for(int i = 0; i < N_RESAMPLE; i++)
+    {
+        direct += fast_distance(fixed[i]*fixed_scale, flip_candidate[i]*flip_scale);
+        flipped += fast_distance(fixed[i]*fixed_scale, flip_candidate[-i + N_RESAMPLE - 1]*flip_scale);
+        flipped_track[i] = flip_candidate[-i + N_RESAMPLE - 1];
+    }
+
+    // potentially flip one of the tracks if mdf is
+    // smaller with flipped track
+    if(flipped < direct)
+    {
+        for(int i = 0; i < N_RESAMPLE; i++)
+        {
+            flip_candidate[i] = flipped_track[i];
+        }
+        return 1.0f / (float)N_RESAMPLE * flipped;
+    }
+    return 1.0f / (float)N_RESAMPLE * direct;
+}
+
+// return the id of the closest cluster
+int quick_bundle(const float3* track,
+                 const int length,
+                 const int n_clusters,
+                 float3* cluster_track_sums,
+                 int* cluster_track_counts)
+{
+    // 1. resample track
+    float3 resampled_track[N_RESAMPLE];
+    resample_track(track, length, resampled_track);
+
+    // 2. compare the resampled track to all cluster centroids
+    float min_mdf = FLT_MAX;
+    int min_cluster_id = 0;
+    for(int i = 0; i < n_clusters; ++i)
+    {
+        const float t_scale = 1.0f / (float)cluster_track_counts[i];
+
+        // compute mdf and optionally flip the resampled track
+        const float mdf = compute_mdf(&cluster_track_sums[i*N_RESAMPLE], t_scale,
+                                      resampled_track, 1.0f);
+
+        if(mdf < min_mdf)
+        {
+            min_mdf = mdf;
+            min_cluster_id = i;
+        }
+    }
+
+    // 3. if min_mdf > QB_THRESHOLD (or there are no
+    // clusters) then we need to add a new cluster
+    if(min_mdf > QB_THRESHOLD && n_clusters < MAX_N_CLUSTERS)
+    {
+        min_cluster_id = n_clusters; // create new cluster
+        cluster_track_counts[min_cluster_id] = 1;
+    }
+    else
+    {
+        ++cluster_track_counts[min_cluster_id];
+    }
+
+    // 4. increment the cluster track count and add the
+    // resampled track to the cluster track sum
+    for (int i = 0; i < N_RESAMPLE; i++)
+    {
+        cluster_track_sums[min_cluster_id*N_RESAMPLE+i] += resampled_track[i];
+    }
+    return min_cluster_id;
 }
 
 int get_flat_index(const int x, const int y, const int z, const int w,
@@ -45,6 +154,25 @@ void reverse_streamline(const int num_strl_points,
         track[i] = track[num_strl_points - 1 - i];
         track[num_strl_points - 1 - i] = temp_pt;
     }
+}
+
+void copy_track_to_output(float3* track, uint global_id, uint track_id,
+                          uint length, int cluster_id, __global float* out_tracks,
+                          __global uint* out_nb_points, __global int* out_cluster_ids)
+{
+    for(uint i = 0; i < length; ++i)
+    {
+        out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 0,
+                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].x;
+        out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 1,
+                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].y;
+        out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 2,
+                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].z;
+    }
+    out_nb_points[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
+                                 0, 0, N_VOX*N_SEEDS_PER_VOX, 1, 1)] = length;
+    out_cluster_ids[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
+                                   0, 0, N_VOX*N_SEEDS_PER_VOX, 1, 1)] = cluster_id;
 }
 
 void sh_to_sf(const float* sh_coeffs, __global const float* sh_to_sf_mat,
@@ -182,86 +310,113 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
     return current_length;
 }
 
-void copy_track_to_output(float3* track, uint global_id, uint track_id,
-                          uint length, __global float* out_tracks,
-                          __global uint* out_nb_points)
+int track(float3 voxel_id, uint* rng_state,
+          const __global float* mask,
+          const __global float* sh_coeffs,
+          const __global float4* vertices,
+          const __global float* sh_to_sf_mat,
+          float3* out_track)
 {
-    for(uint i = 0; i < length; ++i)
+    // generate seeding position
+    rand_xorshift(rng_state);
+    const float xrand = (float)rng_state[0] / (float)UINT_MAX;
+    rand_xorshift(rng_state);
+    const float yrand = (float)rng_state[0] / (float)UINT_MAX;
+    rand_xorshift(rng_state);
+    const float zrand = (float)rng_state[0] / (float)UINT_MAX;
+    const float3 seed_pos = voxel_id + (float3)(xrand, yrand, zrand);
+
+    // track from seed position
+    float3 last_pos = seed_pos;
+    float3 last_dir;
+
+    // initialize streamline with seed position
+    out_track[0] = last_pos;
+    int current_length = 1;
+
+    // forward track
+    current_length = propagate(last_pos, last_dir, current_length,
+                               rng_state, true, mask, sh_coeffs, vertices,
+                               sh_to_sf_mat,  out_track);
+
+    // reverse streamline for backward tracking
+    if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
     {
-        out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 0,
-                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].x;
-        out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 1,
-                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].y;
-        out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 2,
-                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].z;
+        // reset last direction to initial direction
+        last_dir = out_track[0] - out_track[1];
+        last_dir = normalize(last_dir);
+
+        // reverse streamline so the output is continuous
+        reverse_streamline(current_length, &out_track[0]);
+
+        // track backward
+        current_length = propagate(last_pos, last_dir, current_length,
+                                   rng_state, false, mask, sh_coeffs,
+                                   vertices, sh_to_sf_mat, out_track);
     }
-    out_nb_points[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
-                                 0, 0, N_VOX*N_SEEDS_PER_VOX, 1, 1)] = length;
+    return current_length;
 }
 
-// TODO: Test tracking before QB implementation.
 __kernel void main(__global const float4* voxel_ids,
                    __global const float* sh_coeffs,
                    __global const float* mask,
                    __global const float* sh_to_sf_mat,
                    __global const float4* vertices,
                    __global float* out_tracks,
-                   __global uint* out_nb_points)
+                   __global uint* out_nb_points,
+                   __global int* out_cluster_ids)
 {
     // 1. Get seed position from global_id.
     const size_t global_id = get_global_id(0);
     const float4 voxel_id = voxel_ids[global_id];
 
+    // initialize random number generator
+    // NOTE: Can't be 0 because xorshift won't work with 0.
     uint rng_state = global_id + 1;
 
-    // tableau de nseeds_per_vox x max_length float3
-    // float3 tracks[N_SEEDS_PER_VOX][MAX_LENGTH];
-    float3 tracks[1][MAX_LENGTH];
+    // Tracking variables.
+    float3 tracks[N_SEEDS_PER_VOX][MAX_LENGTH];
+    int n_points[N_SEEDS_PER_VOX];
+
+    // Quickbundle clustering variables.
+    int cluster_ids[N_SEEDS_PER_VOX];
+    int cluster_track_counts[MAX_N_CLUSTERS];
+    float3 cluster_track_sums[MAX_N_CLUSTERS*N_RESAMPLE];
+    int n_clusters = 0;
+
     for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
     {
-        // generate seeding position
-        rand_xorshift(&rng_state);
-        const float xrand = (float)rng_state / (float)UINT_MAX;
-        rand_xorshift(&rng_state);
-        const float yrand = (float)rng_state / (float)UINT_MAX;
-        rand_xorshift(&rng_state);
-        const float zrand = (float)rng_state / (float)UINT_MAX;
-        const float3 seed_pos = voxel_id.xyz + (float3)(xrand, yrand, zrand);
+        // 1. Track streamline.
+        n_points[track_id] = track(voxel_id.xyz, &rng_state,
+                                   mask, sh_coeffs, vertices,
+                                   sh_to_sf_mat, tracks[track_id]);
 
-        // track from seed position
-        float3 last_pos = seed_pos;
-        float3 last_dir;
-
-        // initialize streamline with seed position
-        tracks[0][0] = last_pos;
-        int current_length = 1;
-
-        // forward track
-        // TODO: propagation maximum de 1/2*MAX_LENGTH par direction!
-        current_length = propagate(last_pos, last_dir, current_length,
-                                   &rng_state, true, mask, sh_coeffs, vertices,
-                                   sh_to_sf_mat,  &tracks[0][0]);
-
-        // reverse streamline for backward tracking
-        if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
+        // 2. Quickbundle clustering.
+        if(n_points[track_id] > MIN_LENGTH)
         {
-            // reset last direction to initial direction
-            last_dir = tracks[0][0] - tracks[0][1];
-            last_dir = normalize(last_dir);
-
-            // reverse streamline so the output is continuous
-            reverse_streamline(current_length, &tracks[0][0]);
-
-            // track backward
-            current_length = propagate(last_pos, last_dir, current_length,
-                                       &rng_state, false, mask, sh_coeffs,
-                                       vertices, sh_to_sf_mat, &tracks[0][0]);
+            cluster_ids[track_id] = quick_bundle(tracks[track_id], n_points[track_id],
+                                                 n_clusters, cluster_track_sums,
+                                                 cluster_track_counts);
+            if(cluster_ids[track_id] > n_clusters -1)
+            {
+                ++n_clusters;
+            }
         }
-
-        copy_track_to_output(&tracks[0][0], global_id, track_id,
-                             current_length, out_tracks, out_nb_points);
-
-        // TODO: Quickbundle ici.
+        else
+        {
+            cluster_ids[track_id] = -1; // invalid track flag
+        }
     }
-    // TODO: Un coup qu'on a nos bundles, on calcule une FTD par bundle.
+    // TODO: Un coup qu'on a TOUS nos bundles, on calcule une FTD par bundle.
+    // MAYBE: Faire sur le CPU pour utiliser numpy for matrix inversion.
+    // Donc dernier TODO: Cleaner les bundles sous-representes.
+
+    // copy tracks for debug
+    for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
+    {
+        copy_track_to_output(tracks[track_id], global_id, track_id,
+                             n_points[track_id], cluster_ids[track_id],
+                             out_tracks, out_nb_points,
+                             out_cluster_ids);
+    }
 }

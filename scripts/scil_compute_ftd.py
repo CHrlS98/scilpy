@@ -53,19 +53,27 @@ def main():
     min_nb_points = int(args.min_length / args.step_size) + 1
     max_nb_points = int(args.max_length / args.step_size) + 1
 
-    ftd = compute_ftd_gpu(fodf, seeds, mask,
-                          n_seeds_per_vox=args.npv,
-                          step_size=vox_step_size,
-                          theta=20.0,
-                          min_nb_points=min_nb_points,
-                          max_nb_points=max_nb_points,
-                          sh_basis=args.sh_basis)
+    track, ids = compute_ftd_gpu(fodf, seeds, mask,
+                                 n_seeds_per_vox=args.npv,
+                                 step_size=vox_step_size,
+                                 theta=20.0,
+                                 min_nb_points=min_nb_points,
+                                 max_nb_points=max_nb_points,
+                                 sh_basis=args.sh_basis)
 
-    line_a = actor.line(ftd)
-    dots_a = actor.dots(np.concatenate(ftd, axis=0), opacity=0.2)
+    ids = np.asarray(ids)
+    colors = np.zeros((len(ids), 3))
+    colors[ids == 0] = [1.0, 0.0, 0.0]
+    colors[ids == 1] = [1.0, 1.0, 0.0]
+    colors[ids == 2] = [0.0, 1.0, 0.0]
+    colors[ids == 3] = [0.0, 1.0, 1.0]
+    colors[ids == 4] = [0.0, 0.0, 1.0]
+
+    line_a = actor.line(track, colors=colors)
+    # dots_a = actor.dots(np.concatenate(ftd, axis=0), opacity=0.2)
     scene = window.Scene()
     scene.add(line_a)
-    scene.add(dots_a)
+    # scene.add(dots_a)
     window.show(scene)
 
 
