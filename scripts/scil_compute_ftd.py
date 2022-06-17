@@ -69,11 +69,12 @@ def main():
     colors[ids == 3] = [0.0, 1.0, 1.0]
     colors[ids == 4] = [0.0, 0.0, 1.0]
 
-    line_a = actor.line(track, colors=colors)
-    # dots_a = actor.dots(np.concatenate(ftd, axis=0), opacity=0.2)
+    endpoint = np.array([s[0] for s in track])
+    line_a = actor.line(track, colors=colors, opacity=0.5)
+    dots_a = actor.dots(endpoint, opacity=0.8, color=(1, 1, 1))
     scene = window.Scene()
     scene.add(line_a)
-    # scene.add(dots_a)
+    scene.add(dots_a)
     window.show(scene)
 
 

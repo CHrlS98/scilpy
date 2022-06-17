@@ -83,7 +83,8 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
     cl_kernel.set_define('MIN_COS_THETA', '{0:.6f}f'.format(min_cos_theta))
     cl_kernel.set_define('MIN_LENGTH', f'{min_nb_points}')
     cl_kernel.set_define('MAX_LENGTH', f'{max_nb_points}')
-    cl_kernel.set_define('QB_THRESHOLD', '1.5f')
+    cl_kernel.set_define('QB_MDF_THRESHOLD', '1.5f')
+    cl_kernel.set_define('QB_N_TRACKS_THRESHOLD', '10')
     cl_kernel.set_define('FORWARD_ONLY', 'false')
 
     N_INPUTS = 5
@@ -117,7 +118,7 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
     cluster_ids = []
     n_points = n_points.flatten()
     for i in range(nb_voxels*n_seeds_per_vox):
-        if n_points[i] > min_nb_points:
+        if n_points[i] > min_nb_points and cluster_id[i] >= 0:
             streamlines.append(tracks[i, :n_points[i]])
             cluster_ids.append(np.squeeze(cluster_id[i]))
 

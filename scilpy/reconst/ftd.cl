@@ -15,7 +15,9 @@ numerically.
 #define N_VOX 0
 #define N_SEEDS_PER_VOX 0
 #define MAX_N_CLUSTERS 5
-#define QB_THRESHOLD 0.0f
+#define QB_MDF_THRESHOLD 0.0f
+#define QB_MDF_MERGE_THRESHOLD 0.0f
+#define QB_N_TRACKS_THRESHOLD 0
 #define MIN_LENGTH 0
 #define MAX_LENGTH 0
 #define FORWARD_ONLY false
@@ -56,41 +58,49 @@ void resample_track(const float3* in_track,
                     float3* out_track)
 {
     const float delta_t = 1.0f / (float)(N_RESAMPLE - 1);
+    // printf("%s\n", "resampled track");
     for (int i = 0; i < N_RESAMPLE; i++)
     {
         out_track[i] = interp_along_track(in_track, length, i*delta_t);
+        // printf("f3 = %2.2v4hlf\n", out_track[i]);
     }
 }
 
-float compute_mdf(const float3* fixed, const float fixed_scale,
-                  float3* flip_candidate, const float flip_scale)
+float compute_mdf(const float3* s, const float s_scale,
+                  const float3* t, const float t_scale,
+                  bool* hmmm_flip)
 {
     float direct = 0.0f;
     float flipped = 0.0f;
 
-    float3 flipped_track[N_RESAMPLE];
     for(int i = 0; i < N_RESAMPLE; i++)
     {
-        direct += fast_distance(fixed[i]*fixed_scale, flip_candidate[i]*flip_scale);
-        flipped += fast_distance(fixed[i]*fixed_scale, flip_candidate[-i + N_RESAMPLE - 1]*flip_scale);
-        flipped_track[i] = flip_candidate[-i + N_RESAMPLE - 1];
+        direct += fast_distance(s[i]*s_scale, t[i]*t_scale);
+        flipped += fast_distance(s[i]*s_scale, t[-i + N_RESAMPLE - 1]*t_scale);
     }
 
-    // potentially flip one of the tracks if mdf is
-    // smaller with flipped track
     if(flipped < direct)
     {
-        for(int i = 0; i < N_RESAMPLE; i++)
-        {
-            flip_candidate[i] = flipped_track[i];
-        }
+        *hmmm_flip = true;
         return 1.0f / (float)N_RESAMPLE * flipped;
     }
+    *hmmm_flip = false;
     return 1.0f / (float)N_RESAMPLE * direct;
 }
 
+void reverse_streamline(const int num_strl_points,
+                        float3* track)
+{
+    for(int i = 0; i < (int)(num_strl_points/2); ++i)
+    {
+        const float3 temp_pt = track[i];
+        track[i] = track[num_strl_points - 1 - i];
+        track[num_strl_points - 1 - i] = temp_pt;
+    }
+}
+
 // return the id of the closest cluster
-int quick_bundle(const float3* track,
+int quick_bundle(float3* track,  // we could flip it if necessary
                  const int length,
                  const int n_clusters,
                  float3* cluster_track_sums,
@@ -103,25 +113,38 @@ int quick_bundle(const float3* track,
     // 2. compare the resampled track to all cluster centroids
     float min_mdf = FLT_MAX;
     int min_cluster_id = 0;
+    bool min_needs_flip = false;
     for(int i = 0; i < n_clusters; ++i)
     {
         const float t_scale = 1.0f / (float)cluster_track_counts[i];
 
         // compute mdf and optionally flip the resampled track
+        bool needs_flip;
         const float mdf = compute_mdf(&cluster_track_sums[i*N_RESAMPLE], t_scale,
-                                      resampled_track, 1.0f);
+                                      resampled_track, 1.0f, &needs_flip);
+        // if(i == 0) printf("%f\n", mdf);
 
         if(mdf < min_mdf)
         {
             min_mdf = mdf;
             min_cluster_id = i;
+            min_needs_flip = needs_flip;
         }
+    }
+
+    // when required, reverse streamlines
+    if(min_needs_flip)
+    {
+        reverse_streamline(N_RESAMPLE, resampled_track);
+        reverse_streamline(length, track);
     }
 
     // 3. if min_mdf > QB_THRESHOLD (or there are no
     // clusters) then we need to add a new cluster
-    if(min_mdf > QB_THRESHOLD && n_clusters < MAX_N_CLUSTERS)
+    if(min_mdf > QB_MDF_THRESHOLD && n_clusters < MAX_N_CLUSTERS)
     {
+        // printf("%s, %f\n", "Create new bundle", min_mdf);
+
         min_cluster_id = n_clusters; // create new cluster
         cluster_track_counts[min_cluster_id] = 1;
     }
@@ -143,17 +166,6 @@ int get_flat_index(const int x, const int y, const int z, const int w,
                    const int xLen, const int yLen, const int zLen)
 {
     return x + y * xLen + z * xLen * yLen + w * xLen * yLen * zLen;
-}
-
-void reverse_streamline(const int num_strl_points,
-                        float3* track)
-{
-    for(int i = 0; i < (int)(num_strl_points/2); ++i)
-    {
-        const float3 temp_pt = track[i];
-        track[i] = track[num_strl_points - 1 - i];
-        track[num_strl_points - 1 - i] = temp_pt;
-    }
 }
 
 void copy_track_to_output(float3* track, uint global_id, uint track_id,
@@ -370,6 +382,13 @@ __kernel void main(__global const float4* voxel_ids,
     const size_t global_id = get_global_id(0);
     const float4 voxel_id = voxel_ids[global_id];
 
+    /*
+    if(global_id != 5)
+    {
+        return;
+    }
+    */
+
     // initialize random number generator
     // NOTE: Can't be 0 because xorshift won't work with 0.
     uint rng_state = global_id + 1;
@@ -409,7 +428,50 @@ __kernel void main(__global const float4* voxel_ids,
     }
     // TODO: Un coup qu'on a TOUS nos bundles, on calcule une FTD par bundle.
     // MAYBE: Faire sur le CPU pour utiliser numpy for matrix inversion.
-    // Donc dernier TODO: Cleaner les bundles sous-representes.
+
+    // Merger les bundles similaires
+    // !!! FAUDRAIT LE FAIRE AU FUR ET A MESURE POUR QUE LES
+    // PROCHAINES COMPARAISONS UTILISENT LES NOUVEAUX CENTROIDES !!!
+    bool cluster_needs_merge[N_RESAMPLE][N_RESAMPLE];
+    bool cluster_needs_flip[N_RESAMPLE][N_RESAMPLE];
+    for(int ref_cluster_id = 0; ref_cluster_id < n_clusters - 2; ++ref_cluster_id)
+    {
+        for(int cluster_id = ref_cluster_id + 1; cluster_id < n_clusters; ++cluster_id)
+        {
+            const float3* ref_centroid = &cluster_track_sums[ref_cluster_id*N_RESAMPLE];
+            const float ref_scale = 1.0f / (float)cluster_track_counts[ref_cluster_id];
+            const float3* other_centroid = &cluster_track_sums[cluster_id*N_RESAMPLE];
+            const float other_scale = 1.0f / (float)cluster_track_counts[cluster_id];
+
+            bool needs_flip = false;
+            const float mdf = compute_mdf(ref_centroid, ref_scale,
+                                          other_centroid, other_scale,
+                                          &needs_flip);
+        }
+    }
+
+    // Cleaner les bundles sous-representes.
+    int n_invalid_clusters = 0;
+    int invalid_cluster_ids[MAX_N_CLUSTERS];
+    for(int cluster_id = 0; cluster_id < MAX_N_CLUSTERS; ++cluster_id)
+    {
+        if(cluster_track_counts[cluster_id] < QB_N_TRACKS_THRESHOLD)
+        {
+            invalid_cluster_ids[n_invalid_clusters++] = cluster_id;
+        }
+    }
+
+    for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
+    {
+        for(int cluster_id = 0; cluster_id < n_invalid_clusters; ++cluster_id)
+        {
+            const int invalid_cluster_id = invalid_cluster_ids[cluster_id];
+            if(cluster_ids[track_id] == invalid_cluster_id)
+            {
+                cluster_ids[track_id] = -1; // invalid flag
+            }
+        }
+    }
 
     // copy tracks for debug
     for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
