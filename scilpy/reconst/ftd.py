@@ -9,7 +9,9 @@ from dipy.data import get_sphere
 
 def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
                     step_size, theta, min_nb_points,
-                    max_nb_points, sh_basis='descoteaux07'):
+                    max_nb_points, qb_mdf_th=1.0,
+                    qb_n_tracks_rel_th=0.15,
+                    sh_basis='descoteaux07'):
     """
     Compute fiber trajectory distribution from FODF image.
 
@@ -34,16 +36,6 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
     sh_basis: str, optional
         SH basis used for FODF representation.
     """
-    # runs on GPU
-    # method
-    # 1. Foreach voxel inside the mask
-    #     1.2 For i from 0 to max_tracks_per_vox
-    #         1.2.1 Generate seed at random position inside voxel
-    #         1.2.2 Track seed in both directions
-    #         1.2.3 Cluster tracks using Quickbundle
-    #     1.3 Foreach QB cluster
-    #         1.3.1 Compute fiber trajectory distribution
-
     sh_order, full_basis = get_sh_order_and_fullness(fodf.shape[-1])
     sphere = get_sphere('symmetric724')
     nb_vertices = len(sphere.vertices)
@@ -83,8 +75,9 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
     cl_kernel.set_define('MIN_COS_THETA', '{0:.6f}f'.format(min_cos_theta))
     cl_kernel.set_define('MIN_LENGTH', f'{min_nb_points}')
     cl_kernel.set_define('MAX_LENGTH', f'{max_nb_points}')
-    cl_kernel.set_define('QB_MDF_THRESHOLD', '1.5f')
-    cl_kernel.set_define('QB_N_TRACKS_THRESHOLD', '10')
+    cl_kernel.set_define('QB_MDF_THRESHOLD', f'{qb_mdf_th}f')
+    cl_kernel.set_define('QB_N_TRACKS_THRESHOLD',
+                         f'{int(n_seeds_per_vox*qb_n_tracks_rel_th)}')
     cl_kernel.set_define('FORWARD_ONLY', 'false')
 
     N_INPUTS = 5
@@ -95,13 +88,6 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
     cl_manager.add_input_buffer(2, mask, np.float32)
     cl_manager.add_input_buffer(3, B_mat, np.float32)
     cl_manager.add_input_buffer(4, vertices, np.float32)
-
-    # output buffer 0, at most 5 FTD matrices of shape
-    # 3 x 10 per voxel in voxel_ids
-    # cl_manager.add_output_buffer(0, (nb_voxels, 3, 10), np.float32)
-    # output buffer 1, one integer between 0 and 5 per voxel
-    # in voxel_ids
-    # cl_manager.add_output_buffer(1, (nb_voxels, 1), np.uint32)
 
     # Test that tracking works properly
     cl_manager.add_output_buffer(0, (nb_voxels*n_seeds_per_vox,
@@ -118,8 +104,8 @@ def compute_ftd_gpu(fodf, seeds, mask, n_seeds_per_vox,
     cluster_ids = []
     n_points = n_points.flatten()
     for i in range(nb_voxels*n_seeds_per_vox):
-        if n_points[i] > min_nb_points and cluster_id[i] >= 0:
-            streamlines.append(tracks[i, :n_points[i]])
+        if n_points[i] > min_nb_points:
+            streamlines.append(tracks[i, :n_points[i]] - 0.5)
             cluster_ids.append(np.squeeze(cluster_id[i]))
 
     return streamlines, cluster_ids

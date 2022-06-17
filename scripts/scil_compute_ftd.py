@@ -7,6 +7,8 @@ from scilpy.io.utils import (add_reference_arg, add_sh_basis_args,
                              assert_inputs_exist)
 from scilpy.io.image import get_data_as_mask
 from scilpy.reconst.ftd import compute_ftd_gpu
+from dipy.reconst.shm import sh_to_sf_matrix
+from dipy.data import get_sphere
 from fury import actor, window
 
 
@@ -69,12 +71,18 @@ def main():
     colors[ids == 3] = [0.0, 1.0, 1.0]
     colors[ids == 4] = [0.0, 0.0, 1.0]
 
+    sphere = get_sphere('repulsion724')
+    B_mat = sh_to_sf_matrix(sphere, 8, return_inv=False)
+
     endpoint = np.array([s[0] for s in track])
-    line_a = actor.line(track, colors=colors, opacity=0.5)
+    line_a = actor.line(track, opacity=0.5)
+    odf = actor.odf_slicer(fodf, sphere=sphere, B_matrix=B_mat)
+
     dots_a = actor.dots(endpoint, opacity=0.8, color=(1, 1, 1))
     scene = window.Scene()
     scene.add(line_a)
     scene.add(dots_a)
+    scene.add(odf)
     window.show(scene)
 
 

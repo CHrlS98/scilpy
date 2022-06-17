@@ -14,7 +14,7 @@ numerically.
 #define STEP_SIZE 0
 #define N_VOX 0
 #define N_SEEDS_PER_VOX 0
-#define MAX_N_CLUSTERS 5
+#define MAX_N_CLUSTERS 10
 #define QB_MDF_THRESHOLD 0.0f
 #define QB_MDF_MERGE_THRESHOLD 0.0f
 #define QB_N_TRACKS_THRESHOLD 0
@@ -104,7 +104,8 @@ int quick_bundle(float3* track,  // we could flip it if necessary
                  const int length,
                  const int n_clusters,
                  float3* cluster_track_sums,
-                 int* cluster_track_counts)
+                 int* cluster_track_counts,
+                 bool debug)
 {
     // 1. resample track
     float3 resampled_track[N_RESAMPLE];
@@ -116,13 +117,15 @@ int quick_bundle(float3* track,  // we could flip it if necessary
     bool min_needs_flip = false;
     for(int i = 0; i < n_clusters; ++i)
     {
+        // won't happen if there are no clusters
         const float t_scale = 1.0f / (float)cluster_track_counts[i];
+        // if(i == 0 && debug) printf("scale %f\n", t_scale);
 
         // compute mdf and optionally flip the resampled track
         bool needs_flip;
         const float mdf = compute_mdf(&cluster_track_sums[i*N_RESAMPLE], t_scale,
                                       resampled_track, 1.0f, &needs_flip);
-        // if(i == 0) printf("%f\n", mdf);
+        // if(i == 0 && debug) printf("mdf %f\n", mdf);
 
         if(mdf < min_mdf)
         {
@@ -133,6 +136,8 @@ int quick_bundle(float3* track,  // we could flip it if necessary
     }
 
     // when required, reverse streamlines
+    // even if threshold is not respected, flip will occur
+    // this way further merge will make streamlines in right direction
     if(min_needs_flip)
     {
         reverse_streamline(N_RESAMPLE, resampled_track);
@@ -160,6 +165,71 @@ int quick_bundle(float3* track,  // we could flip it if necessary
         cluster_track_sums[min_cluster_id*N_RESAMPLE+i] += resampled_track[i];
     }
     return min_cluster_id;
+}
+
+int merge_clusters(const float3* cluster_track_sums,
+                   const int* cluster_track_counts,
+                   const int n_clusters,
+                   int* cluster_ids)
+{
+    int merged_cluster_ids[MAX_N_CLUSTERS];
+    float3 merged_cluster_track_sums[MAX_N_CLUSTERS*N_RESAMPLE];
+    int merged_cluster_track_count[MAX_N_CLUSTERS];
+    int n_merged_clusters = 0;
+
+    float3 centroid[N_RESAMPLE];
+    for(int centroid_id = 0; centroid_id < n_clusters; ++centroid_id)
+    {
+        // printf("%s %i\n", "Centroid", centroid_id);
+        for(int centroid_point_i = 0; centroid_point_i < N_RESAMPLE; ++centroid_point_i)
+        {
+            centroid[centroid_point_i] = cluster_track_sums[centroid_id*N_RESAMPLE+centroid_point_i]
+                                       / (float)cluster_track_counts[centroid_id];
+            // printf("f3 = %2.2v3hlf\n", centroid[centroid_point_i]);
+        }
+
+        merged_cluster_ids[centroid_id] = quick_bundle(centroid, N_RESAMPLE,
+                                                       n_merged_clusters,
+                                                       merged_cluster_track_sums,
+                                                       merged_cluster_track_count,
+                                                       false);
+        if(merged_cluster_ids[centroid_id] > n_merged_clusters -1)
+        {
+            ++n_merged_clusters;
+        }
+    }
+
+    if(n_merged_clusters < n_clusters) // clusters have been merged
+    {
+        printf("%s", "MERGING CLUSTERS.");
+        for(int merged_cluster_id = 0; merged_cluster_id < n_merged_clusters; ++merged_cluster_id)
+        {
+            int n_to_merge = 0;
+            int ids_to_merge[MAX_N_CLUSTERS];
+            // there are as many centroids as there are clusters
+            for(int i = 0; i < n_clusters; ++i)
+            {
+                if(merged_cluster_ids[i] == merged_cluster_id)
+                {
+                    ids_to_merge[n_to_merge++] = i;
+                }
+            }
+            if(n_to_merge > 1)
+            {
+                for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
+                {
+                    for(int id_to_merge_pos = 1; id_to_merge_pos < n_to_merge; ++id_to_merge_pos)
+                    {
+                        if(cluster_ids[track_id] == ids_to_merge[id_to_merge_pos])
+                        {
+                            cluster_ids[track_id] = ids_to_merge[0];
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return n_merged_clusters;
 }
 
 int get_flat_index(const int x, const int y, const int z, const int w,
@@ -262,15 +332,22 @@ int sample_sf(const float* odf_sf, const float randv)
 
     if(cumsum[N_DIRS - 1] < NULL_SF_EPS)
     {
+        printf("%s\n", "no valid direction");
         return -1;
     }
 
     const float where = (randv * cumsum[N_DIRS - 1]);
     int index = 0;
+    // when where is 0, we must iterate until cumsum[index] > 0
+    while(cumsum[index] < NULL_SF_EPS)
+    {
+        ++index;
+    }
     while(cumsum[index] < where && index < N_DIRS)
     {
         ++index;
     }
+    // printf("%i\n", index);
     return index;
 }
 
@@ -283,6 +360,7 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
               float3* out_track)
 {
     bool is_valid = is_valid_pos(tracking_mask, last_pos);
+
     const int max_length = is_forward && !FORWARD_ONLY ? MAX_LENGTH / 2 : MAX_LENGTH;
 
     while(current_length < max_length && is_valid)
@@ -304,6 +382,9 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
             // 3. Try step.
             const float3 next_pos = last_pos + STEP_SIZE * direction;
             is_valid = is_valid_pos(tracking_mask, next_pos);
+            printf("Last pos f3 = %2.2v3hlf\n", last_pos);
+            printf("Next pos f3 = %2.2v3hlf\n", next_pos);
+            printf("is valid %i\n", is_valid);
             last_dir = normalize(next_pos - last_pos);
             last_pos = next_pos;
         }
@@ -346,11 +427,13 @@ int track(float3 voxel_id, uint* rng_state,
     out_track[0] = last_pos;
     int current_length = 1;
 
+    printf("%s\n", "TRacK");
     // forward track
     current_length = propagate(last_pos, last_dir, current_length,
                                rng_state, true, mask, sh_coeffs, vertices,
                                sh_to_sf_mat,  out_track);
 
+    printf("%i\n", current_length);
     // reverse streamline for backward tracking
     if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
     {
@@ -365,6 +448,28 @@ int track(float3 voxel_id, uint* rng_state,
         current_length = propagate(last_pos, last_dir, current_length,
                                    rng_state, false, mask, sh_coeffs,
                                    vertices, sh_to_sf_mat, out_track);
+
+        // because we early terminate forward tracking to allow backward tracking
+        // we may need to complete incomplete streamlines be redoing forward tracking.
+        if(current_length < MAX_LENGTH)
+        {
+            printf("%s\n", "ENTER RETRACK");
+            // reset last direction to initial direction
+            last_dir = out_track[0] - out_track[1];
+            last_dir = normalize(last_dir);
+            last_pos = out_track[0];
+
+            // reverse streamline so the output is continuous
+            reverse_streamline(current_length, &out_track[0]);
+
+            // track backward
+            const int prev_length = current_length;
+            current_length = propagate(last_pos, last_dir, current_length,
+                                       rng_state, false, mask, sh_coeffs,
+                                       vertices, sh_to_sf_mat, out_track);
+            printf("%s %i %i\n", "retracked fwd\n", prev_length, current_length);
+        }
+
     }
     return current_length;
 }
@@ -382,12 +487,11 @@ __kernel void main(__global const float4* voxel_ids,
     const size_t global_id = get_global_id(0);
     const float4 voxel_id = voxel_ids[global_id];
 
-    /*
-    if(global_id != 5)
+
+    if(global_id != 8)
     {
         return;
     }
-    */
 
     // initialize random number generator
     // NOTE: Can't be 0 because xorshift won't work with 0.
@@ -409,48 +513,31 @@ __kernel void main(__global const float4* voxel_ids,
         n_points[track_id] = track(voxel_id.xyz, &rng_state,
                                    mask, sh_coeffs, vertices,
                                    sh_to_sf_mat, tracks[track_id]);
-
+        /*
         // 2. Quickbundle clustering.
-        if(n_points[track_id] > MIN_LENGTH)
+        if(n_points[track_id] >= MIN_LENGTH)
         {
             cluster_ids[track_id] = quick_bundle(tracks[track_id], n_points[track_id],
                                                  n_clusters, cluster_track_sums,
-                                                 cluster_track_counts);
+                                                 cluster_track_counts, false);
             if(cluster_ids[track_id] > n_clusters -1)
             {
                 ++n_clusters;
             }
         }
         else
+        */
         {
             cluster_ids[track_id] = -1; // invalid track flag
         }
     }
-    // TODO: Un coup qu'on a TOUS nos bundles, on calcule une FTD par bundle.
-    // MAYBE: Faire sur le CPU pour utiliser numpy for matrix inversion.
 
     // Merger les bundles similaires
-    // !!! FAUDRAIT LE FAIRE AU FUR ET A MESURE POUR QUE LES
-    // PROCHAINES COMPARAISONS UTILISENT LES NOUVEAUX CENTROIDES !!!
-    bool cluster_needs_merge[N_RESAMPLE][N_RESAMPLE];
-    bool cluster_needs_flip[N_RESAMPLE][N_RESAMPLE];
-    for(int ref_cluster_id = 0; ref_cluster_id < n_clusters - 2; ++ref_cluster_id)
-    {
-        for(int cluster_id = ref_cluster_id + 1; cluster_id < n_clusters; ++cluster_id)
-        {
-            const float3* ref_centroid = &cluster_track_sums[ref_cluster_id*N_RESAMPLE];
-            const float ref_scale = 1.0f / (float)cluster_track_counts[ref_cluster_id];
-            const float3* other_centroid = &cluster_track_sums[cluster_id*N_RESAMPLE];
-            const float other_scale = 1.0f / (float)cluster_track_counts[cluster_id];
-
-            bool needs_flip = false;
-            const float mdf = compute_mdf(ref_centroid, ref_scale,
-                                          other_centroid, other_scale,
-                                          &needs_flip);
-        }
-    }
+    // n_clusters = merge_clusters(cluster_track_sums, cluster_track_counts,
+    //                             n_clusters, cluster_ids);
 
     // Cleaner les bundles sous-representes.
+    /*
     int n_invalid_clusters = 0;
     int invalid_cluster_ids[MAX_N_CLUSTERS];
     for(int cluster_id = 0; cluster_id < MAX_N_CLUSTERS; ++cluster_id)
@@ -461,17 +548,21 @@ __kernel void main(__global const float4* voxel_ids,
         }
     }
 
-    for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
+    if(n_invalid_clusters > 0)
     {
-        for(int cluster_id = 0; cluster_id < n_invalid_clusters; ++cluster_id)
+        for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
         {
-            const int invalid_cluster_id = invalid_cluster_ids[cluster_id];
-            if(cluster_ids[track_id] == invalid_cluster_id)
+            for(int cluster_id = 0; cluster_id < n_invalid_clusters; ++cluster_id)
             {
-                cluster_ids[track_id] = -1; // invalid flag
+                const int invalid_cluster_id = invalid_cluster_ids[cluster_id];
+                if(cluster_ids[track_id] == invalid_cluster_id)
+                {
+                    cluster_ids[track_id] = -1; // invalid flag
+                }
             }
         }
     }
+    */
 
     // copy tracks for debug
     for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
@@ -481,4 +572,7 @@ __kernel void main(__global const float4* voxel_ids,
                              out_tracks, out_nb_points,
                              out_cluster_ids);
     }
+
+    // TODO: Un coup qu'on a TOUS nos bundles, on calcule une FTD par bundle.
+    // MAYBE: Faire sur le CPU pour utiliser numpy for matrix inversion.
 }
