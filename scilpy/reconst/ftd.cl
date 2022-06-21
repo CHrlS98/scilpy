@@ -12,12 +12,10 @@ numerically.
 
 #define MIN_COS_THETA 0
 #define STEP_SIZE 0
-#define N_VOX 0
 #define N_SEEDS_PER_VOX 0
 #define MAX_N_CLUSTERS 10
 #define QB_MDF_THRESHOLD 0.0f
 #define QB_MDF_MERGE_THRESHOLD 0.0f
-#define QB_N_TRACKS_THRESHOLD 0
 #define MIN_LENGTH 0
 #define MAX_LENGTH 0
 #define FORWARD_ONLY false
@@ -68,7 +66,7 @@ void resample_track(const float3* in_track,
 
 float compute_mdf(const float3* s, const float s_scale,
                   const float3* t, const float t_scale,
-                  bool* hmmm_flip)
+                  bool* flip_required)
 {
     float direct = 0.0f;
     float flipped = 0.0f;
@@ -81,10 +79,10 @@ float compute_mdf(const float3* s, const float s_scale,
 
     if(flipped < direct)
     {
-        *hmmm_flip = true;
+        *flip_required = true;
         return 1.0f / (float)N_RESAMPLE * flipped;
     }
-    *hmmm_flip = false;
+    *flip_required = false;
     return 1.0f / (float)N_RESAMPLE * direct;
 }
 
@@ -103,9 +101,9 @@ void reverse_streamline(const int num_strl_points,
 int quick_bundle(float3* track,  // we could flip it if necessary
                  const int length,
                  const int n_clusters,
+                 const float mdf_threshold,
                  float3* cluster_track_sums,
-                 int* cluster_track_counts,
-                 bool debug)
+                 int* cluster_track_counts)
 {
     // 1. resample track
     float3 resampled_track[N_RESAMPLE];
@@ -119,13 +117,11 @@ int quick_bundle(float3* track,  // we could flip it if necessary
     {
         // won't happen if there are no clusters
         const float t_scale = 1.0f / (float)cluster_track_counts[i];
-        // if(i == 0 && debug) printf("scale %f\n", t_scale);
 
         // compute mdf and optionally flip the resampled track
         bool needs_flip;
         const float mdf = compute_mdf(&cluster_track_sums[i*N_RESAMPLE], t_scale,
                                       resampled_track, 1.0f, &needs_flip);
-        // if(i == 0 && debug) printf("mdf %f\n", mdf);
 
         if(mdf < min_mdf)
         {
@@ -144,9 +140,9 @@ int quick_bundle(float3* track,  // we could flip it if necessary
         reverse_streamline(length, track);
     }
 
-    // 3. if min_mdf > QB_THRESHOLD (or there are no
+    // 3. if min_mdf > mdf_threshold (or there are no
     // clusters) then we need to add a new cluster
-    if(min_mdf > QB_MDF_THRESHOLD && n_clusters < MAX_N_CLUSTERS)
+    if(min_mdf > mdf_threshold && n_clusters < MAX_N_CLUSTERS)
     {
         // printf("%s, %f\n", "Create new bundle", min_mdf);
 
@@ -190,9 +186,9 @@ int merge_clusters(const float3* cluster_track_sums,
 
         merged_cluster_ids[centroid_id] = quick_bundle(centroid, N_RESAMPLE,
                                                        n_merged_clusters,
+                                                       QB_MDF_MERGE_THRESHOLD,
                                                        merged_cluster_track_sums,
-                                                       merged_cluster_track_count,
-                                                       false);
+                                                       merged_cluster_track_count);
         if(merged_cluster_ids[centroid_id] > n_merged_clusters -1)
         {
             ++n_merged_clusters;
@@ -201,7 +197,6 @@ int merge_clusters(const float3* cluster_track_sums,
 
     if(n_merged_clusters < n_clusters) // clusters have been merged
     {
-        printf("%s", "MERGING CLUSTERS.");
         for(int merged_cluster_id = 0; merged_cluster_id < n_merged_clusters; ++merged_cluster_id)
         {
             int n_to_merge = 0;
@@ -242,24 +237,26 @@ void copy_track_to_output(float3* track, uint global_id, uint track_id,
                           uint length, int cluster_id, __global float* out_tracks,
                           __global uint* out_nb_points, __global int* out_cluster_ids)
 {
+    const int n_vox = get_global_size(0);
     for(uint i = 0; i < length; ++i)
     {
         out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 0,
-                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].x;
+                                  0, n_vox*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].x;
         out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 1,
-                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].y;
+                                  0, n_vox*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].y;
         out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 2,
-                                  0, N_VOX*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].z;
+                                  0, n_vox*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = track[i].z;
     }
     out_nb_points[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
-                                 0, 0, N_VOX*N_SEEDS_PER_VOX, 1, 1)] = length;
+                                 0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = length;
     out_cluster_ids[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
-                                   0, 0, N_VOX*N_SEEDS_PER_VOX, 1, 1)] = cluster_id;
+                                   0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = cluster_id;
 }
 
 void sh_to_sf(const float* sh_coeffs, __global const float* sh_to_sf_mat,
               const bool is_first_step, __global const float4* vertices,
-              const float3 last_dir, const float max_cos_theta, float* sf_coeffs)
+              const float3 last_dir, const float max_cos_theta,
+              const float sf_max, float* sf_coeffs)
 {
     for(int u = 0; u < N_DIRS; ++u)
     {
@@ -284,8 +281,8 @@ void sh_to_sf(const float* sh_coeffs, __global const float* sh_to_sf_mat,
                                                                    N_DIRS, 1)];
                 sf_coeffs[u] += ylmu_inv * sh_coeffs[j];
             }
-            // clip negative values
-            if(sf_coeffs[u] < 0.0f)
+            // clip values below threshold
+            if(sf_coeffs[u] < 0.1f * sf_max)
             {
                 sf_coeffs[u] = 0.0f;
             }
@@ -332,7 +329,6 @@ int sample_sf(const float* odf_sf, const float randv)
 
     if(cumsum[N_DIRS - 1] < NULL_SF_EPS)
     {
-        printf("%s\n", "no valid direction");
         return -1;
     }
 
@@ -347,7 +343,6 @@ int sample_sf(const float* odf_sf, const float randv)
     {
         ++index;
     }
-    // printf("%i\n", index);
     return index;
 }
 
@@ -357,6 +352,7 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
               __global const float* sh_coeffs,
               __global const float4* vertices,
               __global const float* sh_to_sf_mat,
+              __global const float* sf_maximums,
               float3* out_track)
 {
     bool is_valid = is_valid_pos(tracking_mask, last_pos);
@@ -368,23 +364,22 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
         // 2. Sample SF at position.
         float odf_sh[IM_N_COEFFS];
         float odf_sf[N_DIRS];
+        float sf_max;
         get_value_nn(sh_coeffs, IM_N_COEFFS, last_pos, odf_sh);
+        get_value_nn(sf_maximums, 1, last_pos, &sf_max);
         sh_to_sf(odf_sh, sh_to_sf_mat, current_length == 1, vertices,
-                 last_dir, MIN_COS_THETA, odf_sf);
+                 last_dir, MIN_COS_THETA, sf_max, odf_sf);
 
         rand_xorshift(rng_state);
         const float randv = (float)rng_state[0] / (float)UINT_MAX;
         const int vert_indice = sample_sf(odf_sf, randv);
-        if(vert_indice > 0)
+        if(vert_indice >= 0)
         {
             const float3 direction = vertices[vert_indice].xyz;
 
             // 3. Try step.
             const float3 next_pos = last_pos + STEP_SIZE * direction;
             is_valid = is_valid_pos(tracking_mask, next_pos);
-            printf("Last pos f3 = %2.2v3hlf\n", last_pos);
-            printf("Next pos f3 = %2.2v3hlf\n", next_pos);
-            printf("is valid %i\n", is_valid);
             last_dir = normalize(next_pos - last_pos);
             last_pos = next_pos;
         }
@@ -408,6 +403,7 @@ int track(float3 voxel_id, uint* rng_state,
           const __global float* sh_coeffs,
           const __global float4* vertices,
           const __global float* sh_to_sf_mat,
+          const __global float* sf_max,
           float3* out_track)
 {
     // generate seeding position
@@ -427,13 +423,11 @@ int track(float3 voxel_id, uint* rng_state,
     out_track[0] = last_pos;
     int current_length = 1;
 
-    printf("%s\n", "TRacK");
     // forward track
     current_length = propagate(last_pos, last_dir, current_length,
                                rng_state, true, mask, sh_coeffs, vertices,
-                               sh_to_sf_mat,  out_track);
+                               sh_to_sf_mat, sf_max, out_track);
 
-    printf("%i\n", current_length);
     // reverse streamline for backward tracking
     if(current_length > 1 && current_length < MAX_LENGTH && !FORWARD_ONLY)
     {
@@ -447,13 +441,12 @@ int track(float3 voxel_id, uint* rng_state,
         // track backward
         current_length = propagate(last_pos, last_dir, current_length,
                                    rng_state, false, mask, sh_coeffs,
-                                   vertices, sh_to_sf_mat, out_track);
+                                   vertices, sh_to_sf_mat, sf_max, out_track);
 
         // because we early terminate forward tracking to allow backward tracking
         // we may need to complete incomplete streamlines be redoing forward tracking.
         if(current_length < MAX_LENGTH)
         {
-            printf("%s\n", "ENTER RETRACK");
             // reset last direction to initial direction
             last_dir = out_track[0] - out_track[1];
             last_dir = normalize(last_dir);
@@ -463,11 +456,9 @@ int track(float3 voxel_id, uint* rng_state,
             reverse_streamline(current_length, &out_track[0]);
 
             // track backward
-            const int prev_length = current_length;
             current_length = propagate(last_pos, last_dir, current_length,
                                        rng_state, false, mask, sh_coeffs,
-                                       vertices, sh_to_sf_mat, out_track);
-            printf("%s %i %i\n", "retracked fwd\n", prev_length, current_length);
+                                       vertices, sh_to_sf_mat, sf_max, out_track);
         }
 
     }
@@ -479,27 +470,23 @@ __kernel void main(__global const float4* voxel_ids,
                    __global const float* mask,
                    __global const float* sh_to_sf_mat,
                    __global const float4* vertices,
+                   __global const float* sf_max,
                    __global float* out_tracks,
                    __global uint* out_nb_points,
                    __global int* out_cluster_ids)
 {
     // 1. Get seed position from global_id.
     const size_t global_id = get_global_id(0);
+    const int n_vox = get_global_size(0);
     const float4 voxel_id = voxel_ids[global_id];
-
-
-    if(global_id != 8)
-    {
-        return;
-    }
 
     // initialize random number generator
     // NOTE: Can't be 0 because xorshift won't work with 0.
     uint rng_state = global_id + 1;
 
     // Tracking variables.
-    float3 tracks[N_SEEDS_PER_VOX][MAX_LENGTH];
-    int n_points[N_SEEDS_PER_VOX];
+    float3 tracks[MAX_LENGTH];
+    int n_points;
 
     // Quickbundle clustering variables.
     int cluster_ids[N_SEEDS_PER_VOX];
@@ -510,67 +497,49 @@ __kernel void main(__global const float4* voxel_ids,
     for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
     {
         // 1. Track streamline.
-        n_points[track_id] = track(voxel_id.xyz, &rng_state,
-                                   mask, sh_coeffs, vertices,
-                                   sh_to_sf_mat, tracks[track_id]);
-        /*
+        n_points = track(voxel_id.xyz, &rng_state,
+                         mask, sh_coeffs, vertices,
+                         sh_to_sf_mat, sf_max,
+                         tracks);
+
         // 2. Quickbundle clustering.
-        if(n_points[track_id] >= MIN_LENGTH)
+        if(n_points >= MIN_LENGTH)
         {
-            cluster_ids[track_id] = quick_bundle(tracks[track_id], n_points[track_id],
-                                                 n_clusters, cluster_track_sums,
-                                                 cluster_track_counts, false);
+            cluster_ids[track_id] = quick_bundle(tracks, n_points, n_clusters, QB_MDF_THRESHOLD,
+                                                 cluster_track_sums, cluster_track_counts);
             if(cluster_ids[track_id] > n_clusters -1)
             {
                 ++n_clusters;
             }
         }
         else
-        */
         {
             cluster_ids[track_id] = -1; // invalid track flag
         }
+
+        // copy track to CPU
+        for(uint i = 0; i < n_points; ++i)
+        {
+            out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 0,
+                                      0, n_vox*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = tracks[i].x;
+            out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 1,
+                                      0, n_vox*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = tracks[i].y;
+            out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 2,
+                                      0, n_vox*N_SEEDS_PER_VOX, MAX_LENGTH, 3)] = tracks[i].z;
+        }
+        out_nb_points[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
+                                     0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = n_points;
     }
 
     // Merger les bundles similaires
-    // n_clusters = merge_clusters(cluster_track_sums, cluster_track_counts,
-    //                             n_clusters, cluster_ids);
+    n_clusters = merge_clusters(cluster_track_sums, cluster_track_counts,
+                                n_clusters, cluster_ids);
 
-    // Cleaner les bundles sous-representes.
-    /*
-    int n_invalid_clusters = 0;
-    int invalid_cluster_ids[MAX_N_CLUSTERS];
-    for(int cluster_id = 0; cluster_id < MAX_N_CLUSTERS; ++cluster_id)
-    {
-        if(cluster_track_counts[cluster_id] < QB_N_TRACKS_THRESHOLD)
-        {
-            invalid_cluster_ids[n_invalid_clusters++] = cluster_id;
-        }
-    }
-
-    if(n_invalid_clusters > 0)
-    {
-        for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
-        {
-            for(int cluster_id = 0; cluster_id < n_invalid_clusters; ++cluster_id)
-            {
-                const int invalid_cluster_id = invalid_cluster_ids[cluster_id];
-                if(cluster_ids[track_id] == invalid_cluster_id)
-                {
-                    cluster_ids[track_id] = -1; // invalid flag
-                }
-            }
-        }
-    }
-    */
-
-    // copy tracks for debug
+    // copy track to cpu
     for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
     {
-        copy_track_to_output(tracks[track_id], global_id, track_id,
-                             n_points[track_id], cluster_ids[track_id],
-                             out_tracks, out_nb_points,
-                             out_cluster_ids);
+        out_cluster_ids[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
+                                       0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = cluster_ids[track_id];
     }
 
     // TODO: Un coup qu'on a TOUS nos bundles, on calcule une FTD par bundle.
