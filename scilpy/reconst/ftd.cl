@@ -56,12 +56,35 @@ void resample_track(const float3* in_track,
                     float3* out_track)
 {
     const float delta_t = 1.0f / (float)(N_RESAMPLE - 1);
-    // printf("%s\n", "resampled track");
     for (int i = 0; i < N_RESAMPLE; i++)
     {
         out_track[i] = interp_along_track(in_track, length, i*delta_t);
-        // printf("f3 = %2.2v4hlf\n", out_track[i]);
     }
+}
+
+float compute_angular_mdf(const float3* s, const float s_scale,
+                          const float3* t, const float t_scale,
+                          bool* flip_required)
+{
+    float direct = 0.0f;
+    float flipped = 0.0f;
+
+    for(int i = 0; i < N_RESAMPLE - 1; i++)
+    {
+        const float3 ds = normalize(s[i + 1] - s[i]);
+        const float3 dt = normalize(t[i + 1] - t[i]);
+        const float3 dt_flip = normalize(t[N_RESAMPLE - 2 - i] - t[N_RESAMPLE - 1 - i]);
+        direct += -dot(ds, dt);
+        flipped += -dot(ds, dt_flip);
+    }
+
+    if(flipped < direct)
+    {
+        *flip_required = true;
+        return 1.0f / (float)(N_RESAMPLE - 1) * flipped;
+    }
+    *flip_required = false;
+    return 1.0f / (float)(N_RESAMPLE - 1) * direct;
 }
 
 float compute_mdf(const float3* s, const float s_scale,
@@ -120,8 +143,8 @@ int quick_bundle(float3* track,  // we could flip it if necessary
 
         // compute mdf and optionally flip the resampled track
         bool needs_flip;
-        const float mdf = compute_mdf(&cluster_track_sums[i*N_RESAMPLE], t_scale,
-                                      resampled_track, 1.0f, &needs_flip);
+        const float mdf = compute_angular_mdf(&cluster_track_sums[i*N_RESAMPLE], t_scale,
+                                              resampled_track, 1.0f, &needs_flip);
 
         if(mdf < min_mdf)
         {
@@ -176,12 +199,10 @@ int merge_clusters(const float3* cluster_track_sums,
     float3 centroid[N_RESAMPLE];
     for(int centroid_id = 0; centroid_id < n_clusters; ++centroid_id)
     {
-        // printf("%s %i\n", "Centroid", centroid_id);
         for(int centroid_point_i = 0; centroid_point_i < N_RESAMPLE; ++centroid_point_i)
         {
             centroid[centroid_point_i] = cluster_track_sums[centroid_id*N_RESAMPLE+centroid_point_i]
                                        / (float)cluster_track_counts[centroid_id];
-            // printf("f3 = %2.2v3hlf\n", centroid[centroid_point_i]);
         }
 
         merged_cluster_ids[centroid_id] = quick_bundle(centroid, N_RESAMPLE,
@@ -512,12 +533,12 @@ __kernel void main(__global const float4* voxel_ids,
                 ++n_clusters;
             }
         }
-        else
+        else // don't cluster invalid tracks
         {
             cluster_ids[track_id] = -1; // invalid track flag
         }
 
-        // copy track to CPU
+        // copy to CPU
         for(uint i = 0; i < n_points; ++i)
         {
             out_tracks[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, i, 0,
@@ -529,8 +550,12 @@ __kernel void main(__global const float4* voxel_ids,
         }
         out_nb_points[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
                                      0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = n_points;
+        out_cluster_ids[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
+                                       0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = cluster_ids[track_id];
     }
+}
 
+/*{
     // Merger les bundles similaires
     n_clusters = merge_clusters(cluster_track_sums, cluster_track_counts,
                                 n_clusters, cluster_ids);
@@ -538,10 +563,5 @@ __kernel void main(__global const float4* voxel_ids,
     // copy track to cpu
     for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
     {
-        out_cluster_ids[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
-                                       0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = cluster_ids[track_id];
     }
-
-    // TODO: Un coup qu'on a TOUS nos bundles, on calcule une FTD par bundle.
-    // MAYBE: Faire sur le CPU pour utiliser numpy for matrix inversion.
-}
+}*/

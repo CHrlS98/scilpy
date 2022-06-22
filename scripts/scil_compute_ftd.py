@@ -6,7 +6,7 @@ import nibabel as nib
 from scilpy.io.utils import (add_reference_arg, add_sh_basis_args,
                              assert_inputs_exist)
 from scilpy.io.image import get_data_as_mask
-from scilpy.reconst.ftd import FTDFitter, _project_to_polynomial
+from scilpy.reconst.ftd import FTDFitter
 from dipy.reconst.shm import sh_to_sf_matrix
 from dipy.data import get_sphere
 from fury import actor, window
@@ -18,6 +18,7 @@ def _build_arg_parser():
     p.add_argument('in_fodf', help='FODF image.')
     p.add_argument('in_seeds', help='Seeding mask.')
     p.add_argument('in_mask', help='Input mask.')
+    p.add_argument('out_ftd', help='Output FTD file (json).')
 
     p.add_argument('--npv', type=int, default=100,
                    help='Number of seeds per voxel.')
@@ -25,6 +26,9 @@ def _build_arg_parser():
                    help='Step size in mm.')
     p.add_argument('--theta', type=float, default=20.0,
                    help='Maximum curvature angle in degrees.')
+    p.add_argument('--angular_mdf_threshold', type=float, default=-0.9,
+                   help='Angular minimum average direct-flip distance'
+                        ' threshold [%(default)s]')
     p.add_argument('--min_length', type=float, default=5.0,
                    help='Minimum length of the streamlines.')
     p.add_argument('--max_length', type=float, default=20.0,
@@ -58,52 +62,9 @@ def main():
     ftd_fitter = FTDFitter(fodf, seeds, mask, args.npv, vox_step_size,
                            args.theta, min_nb_points, max_nb_points,
                            sh_basis=args.sh_basis)
+
     ftd, track, ids = ftd_fitter.fit()
-
-    ids = np.asarray(ids)
-    colors = np.zeros((len(ids), 3))
-    colors[ids == 0] = [1.0, 0.0, 0.0]
-    colors[ids == 1] = [1.0, 1.0, 0.0]
-    colors[ids == 2] = [0.0, 1.0, 0.0]
-    colors[ids == 3] = [0.0, 1.0, 1.0]
-    colors[ids == 4] = [0.0, 0.0, 1.0]
-    colors[ids == 5] = [1.0, 0.0, 1.0]
-    colors[ids == 6] = [0.0, 0.0, 1.0]
-    colors[ids == 7] = [0.0, 0.0, 1.0]
-    colors[ids == 8] = [0.0, 0.0, 1.0]
-    colors[ids == 9] = [0.0, 0.0, 1.0]
-
-    ftd_grid_pos = np.indices((5, 5, 1), dtype=float)
-    ftd_grid_pos = ftd_grid_pos.reshape(3, -1).T / 5.0
-    centers = []
-    dirs = []
-    for vox_pos in ftd.keys():
-        if vox_pos[2] != 1:
-            continue  # just visualize the central slice
-
-        for cluster_i in ftd[vox_pos].keys():
-            ftd_i = ftd[vox_pos][cluster_i]
-            for p in ftd_grid_pos:
-                c = _project_to_polynomial(p).reshape((1, 10))
-                dir = c.dot(ftd_i)
-                centers.append(np.asarray(vox_pos, dtype=np.float32) + p - 0.5)
-                centers.append(np.asarray(vox_pos, dtype=np.float32) + p - 0.5)
-                dirs.append(np.squeeze(dir))
-                dirs.append(np.squeeze(-dir))
-
-    sphere = get_sphere('repulsion724')
-    B_mat = sh_to_sf_matrix(sphere, 8, return_inv=False)
-
-    line_a = actor.line(track, opacity=0.2, colors=colors)
-    odf = actor.odf_slicer(fodf, sphere=sphere, B_matrix=B_mat)
-
-    arrows = actor.arrow(centers, dirs, colors=(1.0, 1.0, 1.0), heights=0.1)
-
-    scene = window.Scene()
-    scene.add(arrows)
-    # scene.add(line_a)
-    scene.add(odf)
-    window.show(scene)
+    ftd.save_to_json('ftd.json')
 
 
 if __name__ == '__main__':
