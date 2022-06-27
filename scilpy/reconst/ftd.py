@@ -319,3 +319,106 @@ def project_to_polynomial(P):
                    P[:, 2],
                    np.ones(len(P))])
     return c
+
+
+class ClusterForFTD(object):
+    def __init__(self, sft, interface_roi):
+        # sft in voxel space with origin corner
+        sft.to_vox()
+        sft.to_corner()
+
+        self.streamlines = sft.streamlines
+        self.start_status = sft.data_per_streamline['start_status']
+        self.end_status = sft.data_per_streamline['end_status']
+        self.seeds = sft.data_per_streamline['seeds'] + 0.5
+        self.interface_vox = np.argwhere(interface_roi)
+        self.voxel_groups = []
+        self._bundle_by_seeding_vox()
+
+    def _bundle_by_seeding_vox(self):
+        seed_vox = self.seeds.astype(np.int32)
+        unique_vox = np.unique(seed_vox, axis=0)
+
+        self.voxel_groups.clear()
+        for uvox in unique_vox:
+            vox_mask = np.all(seed_vox == uvox, axis=1)
+            self.voxel_groups.append(np.nonzero(vox_mask)[0])
+
+    def _filter_endpoint_rois(self, start_pos, end_pos):
+        """
+        Bundle-endpoint streamlines should be excluded if they don't
+        have at least one valid endpoint.
+        """
+        start_indices = start_pos.astype(int)
+        end_indices = end_pos.astype(int)
+
+        # FIXME: Does not work properly!
+        start_at_endpoint = np.array([idx in self.interface_vox
+                                      for idx in start_indices]
+                                     ).reshape((-1, 1))
+        end_at_endpoint = np.array([idx in self.interface_vox
+                                    for idx in end_indices]
+                                   ).reshape((-1, 1))
+
+        # If a strl starts and ends in endpoint roi it should not be discarded.
+        both_ends_to_keep = np.logical_and(start_at_endpoint, end_at_endpoint)\
+            .reshape((-1))
+
+        # the other extremity of a strl in endpoint roi can't be invalid!
+        start_to_keep = np.logical_and(start_at_endpoint, self.end_status == 0)
+        end_to_keep = np.logical_and(end_at_endpoint, self.start_status == 0)
+
+        to_keep = np.logical_or(start_to_keep, end_to_keep).reshape((-1))
+        return np.logical_or(to_keep, both_ends_to_keep)
+
+    def _filter_unexpected_termination(self):
+        statuses = np.column_stack([self.start_status, self.end_status])
+        valid = np.all(statuses == 0, axis=-1)
+        return valid
+
+    def filter_streamlines(self):
+        start_pos = np.array([s[0] for s in self.streamlines])
+        end_pos = np.array([s[-1] for s in self.streamlines])
+
+        # 1. Streamlines with one endpoint in interface rois are only valid
+        # if their second endpoint is valid.
+        valid_endpoint_in_roi = self._filter_endpoint_rois(start_pos, end_pos)
+
+        # 2. If streamline has two valid endpoints, it is valid
+        valid_both_endpoints = self._filter_unexpected_termination()
+
+        # 3. valid streamlines are the union of both sets
+        all_valid = np.logical_or(valid_endpoint_in_roi, valid_both_endpoints)
+
+        self.streamlines = self.streamlines[all_valid]
+        self.seeds = self.seeds[all_valid]
+
+        # 4. generate bundles based on seeding position
+        self._bundle_by_seeding_vox()
+
+    def cluster_gpu(self):
+        strl_gpu = []
+        strl_lengths = []
+        group_lengths = []
+        for group in self.voxel_groups:
+            strl_group = self.streamlines[group]
+            lengths = self.streamlines._lengths[group]
+            nb_strl = len(lengths)
+
+            strl_gpu.extend(np.concatenate(strl_group, axis=0))
+            strl_lengths.extend(lengths)
+            group_lengths.append(nb_strl)
+
+        strl_offsets = np.append([0], np.cumsum(strl_lengths))
+        group_offsets = np.append([0], np.cumsum(group_lengths))
+
+        # TODO: Input resampled or compressed tractogram
+        # Peut-être que mes streamlines devraient être resamplees
+        # avant d'aller sur GPU
+
+        # TODO: 1er bundling sur l'orientation par voxel
+        # TODO: 2e bundling sur la distance entre les clusters, intervoxel
+
+        # Return each streamlines cluster id
+
+        return 0
