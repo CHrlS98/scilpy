@@ -3,8 +3,8 @@
 import argparse
 import numpy as np
 import nibabel as nib
-from scilpy.io.utils import (add_reference_arg, add_sh_basis_args,
-                             assert_inputs_exist)
+from scilpy.io.utils import (add_overwrite_arg, add_reference_arg, add_sh_basis_args,
+                             assert_inputs_exist, assert_outputs_exist)
 from scilpy.io.image import get_data_as_mask
 from scilpy.reconst.ftd import FTDFitter
 from dipy.reconst.shm import sh_to_sf_matrix
@@ -36,6 +36,7 @@ def _build_arg_parser():
 
     add_sh_basis_args(p)
     add_reference_arg(p)
+    add_overwrite_arg(p)
     return p
 
 
@@ -44,6 +45,7 @@ def main():
     args = parser.parse_args()
 
     assert_inputs_exist(parser, [args.in_fodf, args.in_mask])
+    assert_outputs_exist(parser, args, args.out_ftd)
 
     # images
     fodf_im = nib.load(args.in_fodf)
@@ -63,8 +65,8 @@ def main():
                            args.theta, min_nb_points, max_nb_points,
                            sh_basis=args.sh_basis)
 
-    ftd, track, ids = ftd_fitter.fit()
-    ftd.save_to_json('ftd.json')
+    ftd = ftd_fitter.fit()
+    ftd.save_to_json(args.out_ftd)
 
 
 if __name__ == '__main__':

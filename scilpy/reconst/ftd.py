@@ -44,9 +44,9 @@ class FTDFitter(object):
     """
     def __init__(self, fodf, seeds, mask, n_seeds_per_vox,
                  step_size, theta, min_nb_points, max_nb_points,
-                 qb_mdf_th=-0.9, qb_mdf_merge_th=-1.0, batch_size=500,
+                 qb_mdf_th=-0.9, qb_mdf_merge_th=-0.9, batch_size=500,
                  qb_n_tracks_rel_th=0.05, forward_only=False,
-                 sh_basis='descoteaux07'):
+                 sh_basis='descoteaux07', return_tracks=False):
         self.sphere = get_sphere('symmetric724')
         sh_order, full_basis = get_sh_order_and_fullness(fodf.shape[-1])
         self.min_cos_theta = np.cos(np.deg2rad(theta))
@@ -70,6 +70,7 @@ class FTDFitter(object):
         self.qb_n_tracks_rel_th = qb_n_tracks_rel_th
         self.sh_basis = sh_basis
         self.forward_only = forward_only
+        self.return_tracks = return_tracks
 
     def fit(self):
         """
@@ -124,7 +125,6 @@ class FTDFitter(object):
         cl_manager.add_input_buffer(5, self.sf_max, np.float32)
 
         streamlines = []
-        cluster_ids = []
         ftds = {}
         for batch_i, batch_vox_ids in enumerate(self.seed_voxel_ids):
             nb_voxels = len(batch_vox_ids)
@@ -181,42 +181,76 @@ class FTDFitter(object):
                             vox_n_points[vox_clusters == cluster_i]
 
                         # cluster tracks
-                        cluster_tracks = [cluster_tracks[i, :cluster_n_points[i]]
-                                          for i in range(len(cluster_tracks))]
+                        cluster_tracks =\
+                            [cluster_tracks[i, :cluster_n_points[i]]
+                             for i in range(len(cluster_tracks))]
 
                         ftd =\
                             self._compute_ftd_for_bundle(cluster_tracks,
                                                          vox_pos.astype(float))
-                        streamlines.extend(cluster_tracks)
-                        cluster_ids.extend([cluster_i]*len(cluster_tracks))
+                        if self.return_tracks:
+                            streamlines.extend(cluster_tracks)
                         ftds[tuple(vox_pos.astype(int))].append(ftd)
 
                 # remove element if no valid clusters are created
                 if len(ftds[tuple(vox_pos.astype(int))]) == 0:
                     ftds.pop(tuple(vox_pos.astype(int)))
 
-        return FTDFit(ftds), streamlines, cluster_ids
+        if self.return_tracks:
+            return FTDFit(ftds), streamlines
+        return FTDFit(ftds)
 
-    def _compute_ftd_for_bundle(self, streamlines, vox_pos):
+    def _compute_ftd_for_bundle(self, streamlines, vox_pos, reg=0.01):
         """
         Compute the fiber trajectory distribution for a bundle.
         """
-        # 2nd compute derivatives
-        V = np.concatenate([s[1:] - s[:-1] for s in streamlines], axis=0)
-        V = V / np.linalg.norm(V, axis=-1, keepdims=True)
+        # Compute derivatives to use as target (dependent variable)
+        T = np.concatenate([s[1:] - s[:-1] for s in streamlines], axis=0)
+        T = T / np.linalg.norm(T, axis=-1, keepdims=True)
 
-        # 3rd compute polynomial representation of the streamlines
-        C = np.concatenate([s[:-1] for s in streamlines], axis=0)
+        # Compute independent variable
+        phi_x =\
+            np.concatenate([s[:-1] for s in streamlines], axis=0) - vox_pos
 
-        # center points around voxel position
-        C = C - vox_pos
+        # project to polynomial
+        phi_x = project_to_polynomial(phi_x)  # (N, 10)
 
-        C = project_to_polynomial(C)
+        # maximum likelihood
+        W = np.linalg.inv(phi_x.dot(phi_x.T) + reg).dot(phi_x).dot(T)
 
-        # 4th Solve the least-squares problem to find the FTD
-        FTD = np.linalg.lstsq(C, V, rcond=None)[0]
+        # we are supposed to get near-unit vectors. Is it the case?
+        # TODO: Evaluate goodness of fit.
 
-        return FTD
+        return W.astype(np.float32)
+
+
+class FTDFitDeluxe(object):
+    """
+    Deluxe FTD field container.
+    """
+    def __init__(self, dimensions):
+        self.dims = dimensions
+        self.ftd_dict = {"dimensions": self.dims,
+                         "voxels": {}}
+
+    def _hash_pos(self, position):
+        pos_int = position.astype(int)
+        hash_n_smash = pos_int[2] * self.dims[1] * self.dims[0]\
+            + pos_int[1] * self.dims[0] + pos_int[0]
+        return hash_n_smash
+
+    def add_element(self, position, ftd, weight):
+        pos_key = self._hash_pos(position)
+        ftd_dict_voxels = self.ftd_dict["voxels"]
+        if pos_key not in ftd_dict_voxels:
+            ftd_dict_voxels[pos_key] = {}
+        cluster_key = "cluster {}".format(len(ftd_dict_voxels[pos_key]))
+        ftd_dict_voxels[pos_key][cluster_key] = {}
+        ftd_dict_voxels[pos_key][cluster_key]["ftd"] = ftd.tolist()
+        ftd_dict_voxels[pos_key][cluster_key]["weight"] = weight
+
+    def to_json(self):
+        return json.dumps(self.ftd_dict, indent=2)
 
 
 class FTDFit(object):
@@ -274,14 +308,14 @@ class FTDFit(object):
 def project_to_polynomial(P):
     if P.ndim == 1:
         P = P[None, :]
-    c = np.column_stack([P[:, 0]**2,
-                         P[:, 1]**2,
-                         P[:, 2]**2,
-                         P[:, 0]*P[:, 1],
-                         P[:, 0]*P[:, 2],
-                         P[:, 1]*P[:, 2],
-                         P[:, 0],
-                         P[:, 1],
-                         P[:, 2],
-                         np.ones(len(P))])
+    c = np.vstack([P[:, 0]**2,
+                   P[:, 1]**2,
+                   P[:, 2]**2,
+                   P[:, 0]*P[:, 1],
+                   P[:, 0]*P[:, 2],
+                   P[:, 1]*P[:, 2],
+                   P[:, 0],
+                   P[:, 1],
+                   P[:, 2],
+                   np.ones(len(P))])
     return c
