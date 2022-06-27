@@ -448,7 +448,7 @@ class GPUTacker():
         # Convert theta to cos(theta)
         max_cos_theta = np.cos(np.deg2rad(self.theta))
 
-        cl_kernel = CLKernel('track', 'tracking', 'local_tracking.cl')
+        cl_kernel = CLKernel('main', 'tracking', 'local_tracking.cl')
 
         # Set tracking parameters
         # TODO: Add relative sf_threshold parameter.
@@ -466,7 +466,7 @@ class GPUTacker():
 
         # Create CL program
         n_input_params = 7
-        n_output_params = 2
+        n_output_params = 4
         cl_manager = CLManager(cl_kernel, n_input_params, n_output_params)
 
         # Input buffers
@@ -502,21 +502,31 @@ class GPUTacker():
             cl_manager.add_input_buffer(5, rand_vals)
 
             # output streamlines buffer
-            cl_manager.add_output_buffer(
-                0, (len(seed_batch), self.max_strl_points, 3))
+            cl_manager.add_output_buffer(0, (len(seed_batch),
+                                             self.max_strl_points, 3))
             # output streamlines length buffer
             cl_manager.add_output_buffer(1, (len(seed_batch), 1))
+            # output streamline first point status buffer
+            cl_manager.add_output_buffer(2, (len(seed_batch), 1),
+                                         dtype=np.uint32)
+            # output streamline last point status buffer
+            cl_manager.add_output_buffer(3, (len(seed_batch), 1),
+                                         dtype=np.uint32)
 
             # Run the kernel
-            tracks, n_points = cl_manager.run((len(seed_batch), 1, 1))
+            tracks, n_points, first_pt_status, last_pt_status =\
+                cl_manager.run((len(seed_batch), 1, 1))
             n_points = n_points.squeeze().astype(np.int16)
-            for (strl, seed, n_pts) in zip(tracks, seed_batch, n_points):
+            for (strl, seed, n_pts,
+                 start_status, end_status) in zip(tracks, seed_batch, n_points,
+                                                  first_pt_status,
+                                                  last_pt_status):
                 if n_pts >= self.min_strl_points:
                     strl = strl[:n_pts]
                     nb_valid_streamlines += 1
 
                     # output is yielded so that we can use lazy tractogram.
-                    yield strl, seed
+                    yield strl, seed, start_status, end_status
 
             # per-batch logging information
             nb_processed_streamlines += len(seed_batch)

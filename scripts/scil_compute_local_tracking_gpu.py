@@ -137,9 +137,11 @@ def main():
     # wrapper for tracker.track() yielding one TractogramItem per
     # streamline for use with the LazyTractogram.
     def tracks_generator_wrapper():
-        for strl, seed in tracker.track():
+        for strl, seed, start_status, end_status in tracker.track():
             # seed must be saved in voxel space, with origin `center`.
             dps = {'seeds': seed - 0.5} if args.save_seeds else {}
+            dps['start_status'] = start_status
+            dps['end_status'] = end_status
 
             # TODO: Investigate why the streamline must NOT be shifted to
             # origin `corner` for LazyTractogram.
