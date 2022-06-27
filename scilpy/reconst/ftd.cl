@@ -13,7 +13,7 @@ numerically.
 #define MIN_COS_THETA 0
 #define STEP_SIZE 0
 #define N_SEEDS_PER_VOX 0
-#define MAX_N_CLUSTERS 10
+#define MAX_N_CLUSTERS 8
 #define QB_MDF_THRESHOLD 0.0f
 #define QB_MDF_MERGE_THRESHOLD 0.0f
 #define MIN_LENGTH 0
@@ -23,7 +23,7 @@ numerically.
 // CONSTANTS
 #define FLOAT_TO_BOOL_EPSILON 0.1f
 #define NULL_SF_EPS 0.0001f
-#define N_RESAMPLE 10
+#define N_RESAMPLE 3
 
 // pseudo random number generator
 void rand_xorshift(uint* rng_state)
@@ -550,12 +550,8 @@ __kernel void main(__global const float4* voxel_ids,
         }
         out_nb_points[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
                                      0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = n_points;
-        out_cluster_ids[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
-                                       0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = cluster_ids[track_id];
     }
-}
 
-/*{
     // Merger les bundles similaires
     n_clusters = merge_clusters(cluster_track_sums, cluster_track_counts,
                                 n_clusters, cluster_ids);
@@ -563,5 +559,7 @@ __kernel void main(__global const float4* voxel_ids,
     // copy track to cpu
     for(int track_id = 0; track_id < N_SEEDS_PER_VOX; ++track_id)
     {
+        out_cluster_ids[get_flat_index(global_id*N_SEEDS_PER_VOX+track_id, 0,
+                                       0, 0, n_vox*N_SEEDS_PER_VOX, 1, 1)] = cluster_ids[track_id];
     }
-}*/
+}
