@@ -11,7 +11,7 @@ with the --save_seeds option.
 """
 
 import argparse
-
+import numpy as np
 from dipy.io.streamline import load_tractogram
 from fury import window, actor
 from nibabel.streamlines import detect_format, TrkFile
@@ -56,15 +56,37 @@ def main():
     if 'seeds' not in tractogram.data_per_streamline:
         parser.error('Tractogram does not contain seeds')
     seeds = tractogram.data_per_streamline['seeds']
+    start_status = tractogram.data_per_streamline['start_status']
+    end_status = tractogram.data_per_streamline['end_status']
+
+    print((start_status == end_status).all())
+
+    def _status_to_color(status):
+        if status == 0:  # normal
+            return [0.0, 1.0, 0.0]
+        if status == 1:  # invalid direction
+            return [1.0, 0.0, 0.0]
+        if status == 2:  # invalid position
+            return [0.0, 0.0, 1.0]
+
+    start_pos = np.array([s[0] for s in streamlines])
+    end_pos = np.array([s[-1] for s in streamlines])
+
+    start_colors = np.array([_status_to_color(s) for s in start_status])
+    end_colors = np.array([_status_to_color(s) for s in end_status])
 
     # Make display objects
     streamlines_actor = actor.line(streamlines)
     points = actor.dots(seeds, color=(1., 1., 1.))
+    start_pts = actor.point(start_pos, colors=start_colors)
+    end_pts = actor.point(end_pos, colors=end_colors)
 
     # Add display objects to canvas
     s = window.Scene()
     s.add(streamlines_actor)
     s.add(points)
+    s.add(start_pts)
+    s.add(end_pts)
 
     # Show and record if needed
     if args.save is not None:
