@@ -331,18 +331,8 @@ class ClusterForFTD(object):
         self.start_status = sft.data_per_streamline['start_status']
         self.end_status = sft.data_per_streamline['end_status']
         self.seeds = sft.data_per_streamline['seeds'] + 0.5
-        self.interface_vox = np.argwhere(interface_roi)
-        self.voxel_groups = []
-        self._bundle_by_seeding_vox()
-
-    def _bundle_by_seeding_vox(self):
-        seed_vox = self.seeds.astype(np.int32)
-        unique_vox = np.unique(seed_vox, axis=0)
-
-        self.voxel_groups.clear()
-        for uvox in unique_vox:
-            vox_mask = np.all(seed_vox == uvox, axis=1)
-            self.voxel_groups.append(np.nonzero(vox_mask)[0])
+        self.interface_roi = interface_roi
+        self.all_valid_mask = np.zeros(len(self.streamlines))
 
     def _filter_endpoint_rois(self, start_pos, end_pos):
         """
@@ -352,21 +342,23 @@ class ClusterForFTD(object):
         start_indices = start_pos.astype(int)
         end_indices = end_pos.astype(int)
 
-        # FIXME: Does not work properly!
-        start_at_endpoint = np.array([idx in self.interface_vox
-                                      for idx in start_indices]
-                                     ).reshape((-1, 1))
-        end_at_endpoint = np.array([idx in self.interface_vox
-                                    for idx in end_indices]
-                                   ).reshape((-1, 1))
+        start_at_endpoint = self.interface_roi[start_indices[:, 0],
+                                               start_indices[:, 1],
+                                               start_indices[:, 2]]
+
+        end_at_endpoint = self.interface_roi[end_indices[:, 0],
+                                             end_indices[:, 1],
+                                             end_indices[:, 2]]
 
         # If a strl starts and ends in endpoint roi it should not be discarded.
         both_ends_to_keep = np.logical_and(start_at_endpoint, end_at_endpoint)\
             .reshape((-1))
 
         # the other extremity of a strl in endpoint roi can't be invalid!
-        start_to_keep = np.logical_and(start_at_endpoint, self.end_status == 0)
-        end_to_keep = np.logical_and(end_at_endpoint, self.start_status == 0)
+        start_to_keep = np.logical_and(start_at_endpoint,
+                                       np.squeeze(self.end_status == 0))
+        end_to_keep = np.logical_and(end_at_endpoint,
+                                     np.squeeze(self.start_status == 0))
 
         to_keep = np.logical_or(start_to_keep, end_to_keep).reshape((-1))
         return np.logical_or(to_keep, both_ends_to_keep)
@@ -390,35 +382,63 @@ class ClusterForFTD(object):
         # 3. valid streamlines are the union of both sets
         all_valid = np.logical_or(valid_endpoint_in_roi, valid_both_endpoints)
 
-        self.streamlines = self.streamlines[all_valid]
-        self.seeds = self.seeds[all_valid]
-
-        # 4. generate bundles based on seeding position
-        self._bundle_by_seeding_vox()
+        self.all_valid_mask = all_valid
 
     def cluster_gpu(self):
-        strl_gpu = []
-        strl_lengths = []
-        group_lengths = []
-        for group in self.voxel_groups:
-            strl_group = self.streamlines[group]
-            lengths = self.streamlines._lengths[group]
-            nb_strl = len(lengths)
+        # get valid streamlines
+        valid_streamlines = self.streamlines[self.all_valid_mask]
 
-            strl_gpu.extend(np.concatenate(strl_group, axis=0))
-            strl_lengths.extend(lengths)
-            group_lengths.append(nb_strl)
+        # valid seed positions
+        valid_seed_voxels = self.seeds[self.all_valid_mask].astype(np.int32)
+        unique_seed_voxels = np.unique(valid_seed_voxels, axis=0)
 
-        strl_offsets = np.append([0], np.cumsum(strl_lengths))
-        group_offsets = np.append([0], np.cumsum(group_lengths))
+        # prepare streamlines access on the gpu
+        # TODO: this step can be batched!
+        nb_strl_per_vox = []
+        strl_nb_points = []
+        strl_points = []
+        for i, uvox in enumerate(unique_seed_voxels):
+            mask = np.all(valid_seed_voxels == uvox, axis=-1)
+            strl_in_vox = valid_streamlines[mask]
+            nb_strl_per_vox.append(len(strl_in_vox))
+            strl_nb_points.extend(strl_in_vox._lengths)
+            strl_points.extend(np.concatenate(strl_in_vox, axis=0)
+                               .astype(np.float32))
 
-        # TODO: Input resampled or compressed tractogram
-        # Peut-être que mes streamlines devraient être resamplees
-        # avant d'aller sur GPU
+        # instead of lengths, we will use offsets for faster access
+        strl_in_vox_offset = np.append([0], np.cumsum(nb_strl_per_vox))
+        strl_offset = np.append([0], np.cumsum(strl_nb_points))
 
-        # TODO: 1er bundling sur l'orientation par voxel
+        # format as float4 for gpu
+        strl_points = np.column_stack((strl_points,
+                                       np.ones(len(strl_points))))\
+                        .astype(np.float32).flatten()
+
+        cl_kernel = CLKernel('cluster_per_voxel', 'reconst', 'cluster_st.cl')
+        cl_kernel.set_define('MAX_NB_STRL',
+                             f'{int(np.max(nb_strl_per_vox))}')
+
+        N_INPUTS = 3
+        N_OUTPUTS = 1  # let's start with only outputing the number of clusters
+        cl_manager = CLManager(cl_kernel, N_INPUTS, N_OUTPUTS)
+
+        # 1er bundling sur l'orientation par voxel
+        cl_manager.add_input_buffer(0, strl_points)
+        cl_manager.add_input_buffer(1, strl_offset, np.uint32)
+        cl_manager.add_input_buffer(2, strl_in_vox_offset, np.uint32)
+
+        cl_manager.add_output_buffer(0, (len(unique_seed_voxels),), np.uint32)
+
+        # TODO: Also output centroids.
+        nb_clusters = cl_manager.run((len(unique_seed_voxels), 1, 1))
+
+        output_labels = np.zeros(self.interface_roi.shape, dtype=np.uint8)
+        output_labels[unique_seed_voxels[:, 0],
+                      unique_seed_voxels[:, 1],
+                      unique_seed_voxels[:, 2]] = nb_clusters
+
         # TODO: 2e bundling sur la distance entre les clusters, intervoxel
 
-        # Return each streamlines cluster id
+        # TODO: Return each streamlines cluster id
 
-        return 0
+        return output_labels

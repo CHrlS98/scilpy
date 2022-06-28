@@ -24,6 +24,8 @@ def _build_arg_parser():
                    help='Input short-tracks tractogram.')
     p.add_argument('in_endpoints',
                    help='Interface mask.')
+    p.add_argument('out_labels',
+                   help='Output label map.')
 
     add_overwrite_arg(p)
     return p
@@ -42,6 +44,7 @@ def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
     assert_inputs_exist(parser, [args.in_tractogram, args.in_endpoints])
+    assert_outputs_exist(parser, args, args.out_labels)
 
     tracts_format = detect_format(args.in_tractogram)
     if tracts_format is not TrkFile:
@@ -56,19 +59,33 @@ def main():
 
     clusters = ClusterForFTD(tractogram, endpoint_roi)
     clusters.filter_streamlines()
-    clusters.cluster_gpu()
+    labels = clusters.cluster_gpu()
 
-    streamlines = clusters.streamlines
-    seeds = clusters.seeds
+    nib.save(nib.Nifti1Image(labels.astype(np.uint8), tractogram.affine),
+             args.out_labels)
+
+    mask = clusters.all_valid_mask
+    streamlines = clusters.streamlines[mask]
+    seeds = clusters.seeds[mask]
+    start_status = clusters.start_status[mask]
+    end_status = clusters.end_status[mask]
+
+    start_pos = np.array([s[0] for s in streamlines])
+    end_pos = np.array([s[-1] for s in streamlines])
+    start_colors = np.array([_status_to_color(s) for s in start_status])
+    end_colors = np.array([_status_to_color(s) for s in end_status])
 
     # Make display objects
     streamlines_actor = actor.line(streamlines)
     points = actor.dots(seeds, color=(1., 1., 1.))
+    start_pts = actor.point(start_pos, colors=start_colors,
+                            phi=4, theta=4)
 
     # Add display objects to canvas
     s = window.Scene()
     s.add(streamlines_actor)
     s.add(points)
+    # s.add(start_pts)
 
     # Show
     window.show(s)
