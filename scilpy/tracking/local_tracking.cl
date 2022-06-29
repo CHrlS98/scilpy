@@ -261,6 +261,13 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
             ++current_length;
         }
     }
+    // if we are still valid when we exit the loop, we
+    // need to set the endpoint status to valid
+    if(is_valid)
+    {
+        *endpoint_status = VALID_ENDPOINT_STATUS;
+    }
+    // finally, we return the streamline length
     return current_length;
 }
 
