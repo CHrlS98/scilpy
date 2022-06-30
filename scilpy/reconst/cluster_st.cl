@@ -8,15 +8,14 @@ TODO: All streamlines do not need to be pushed on the GPU at the same time.
 #define N_RESAMPLE 6
 #define MAX_N_CLUSTERS 10
 #define MAX_NB_STRL 0
-#define MAX_DEVIATION 1.0f
+#define MAX_DEVIATION 0.7f
 
 uint get_nb_points(uint index, __global const uint* strl_offsets)
 {
     return strl_offsets[index + 1] - strl_offsets[index];
 }
 
-uint get_nb_streamlines(uint voxel_id,
-                        __global const uint* strl_per_vox_offsets)
+uint get_nb_streamlines(uint voxel_id, __global const uint* strl_per_vox_offsets)
 {
     return strl_per_vox_offsets[voxel_id + 1] - strl_per_vox_offsets[voxel_id];
 }
@@ -99,7 +98,7 @@ int quick_bundle(__global const float4* track,
         // compute distance to each cluster
         bool _needs_flip;
         const float dist = min_mean_angular_deviation(
-            track, &cluster_track_sums[i*N_RESAMPLE],
+            resampled_track, &cluster_track_sums[i*N_RESAMPLE],
             &_needs_flip);
 
         if(dist < min_dist)
@@ -117,6 +116,13 @@ int quick_bundle(__global const float4* track,
 
         best_cluster_id = nb_clusters; // create new cluster
         cluster_track_counts[best_cluster_id] = 1;
+
+        // initialize track sum to 0
+        for(int i = 0; i < N_RESAMPLE; ++i)
+        {
+            cluster_track_sums[best_cluster_id*N_RESAMPLE+i] =
+                (float4)(0.0f, 0.0f, 0.0f, 0.0f);
+        }
     }
     else // we must increment the number of tracks in the best cluster
     {
@@ -139,6 +145,7 @@ int quick_bundle(__global const float4* track,
 }
 
 
+// FIXME: I think there is a bug here...
 __kernel void cluster_per_voxel(__global const float4* all_points,
                                 __global const uint* strl_pts_offsets,
                                 __global const uint* strl_per_vox_offsets,
@@ -159,7 +166,7 @@ __kernel void cluster_per_voxel(__global const float4* all_points,
     int cluster_track_counts[MAX_N_CLUSTERS];
 
     // Number of clusters
-    int nb_clusters = 0;
+    uint nb_clusters = 0;
 
 
     // iterate through all streamlines and cluster each of them
