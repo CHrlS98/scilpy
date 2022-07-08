@@ -213,7 +213,7 @@ def _get_affine_for_texture(orientation, offset):
 
 def create_texture_slicer(texture, orientation, slice_index, mask=None,
                           value_range=None, opacity=1.0, offset=0.5,
-                          interpolation='nearest'):
+                          cmap_lut=None, interpolation='nearest'):
     """
     Create a texture displayed behind the fODF. The texture is applied on a
     plane with a given offset for the fODF grid.
@@ -256,7 +256,8 @@ def create_texture_slicer(texture, orientation, slice_index, mask=None,
                           0, 255)
 
     slicer_actor = actor.slicer(texture, affine=affine,
-                                opacity=opacity, interpolation=interpolation)
+                                opacity=opacity, interpolation=interpolation,
+                                lookup_colormap=cmap_lut)
     set_display_extent(slicer_actor, orientation, texture.shape, slice_index)
     return slicer_actor
 
