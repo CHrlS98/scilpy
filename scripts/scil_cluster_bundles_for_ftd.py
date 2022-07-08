@@ -1,72 +1,38 @@
 #!/usr/bin/env python3
 import argparse
+import logging
+import json
+from time import perf_counter
 import nibabel as nib
 import numpy as np
-from scilpy.io.utils import (add_verbose_arg, assert_inputs_exist,
-                             assert_outputs_exist,
+from scilpy.io.streamlines import load_tractogram_with_reference
+from scilpy.io.utils import (add_reference_arg, add_verbose_arg,
+                             assert_inputs_exist, assert_outputs_exist,
                              add_overwrite_arg)
-from scilpy.io.image import get_data_as_mask
+from dipy.io.streamline import save_tractogram, StatefulTractogram
 from scilpy.reconst.ftd import ClusterForFTD
-
-from dipy.io.streamline import (load_tractogram,
-                                save_tractogram,
-                                StatefulTractogram)
-from fury import window, actor
-from nibabel.streamlines import detect_format, TrkFile
 
 
 def _build_arg_parser():
     p = argparse.ArgumentParser()
     p.add_argument('in_tractogram',
                    help='Input short-tracks tractogram.')
-    p.add_argument('in_interface',
-                   help='Interface mask.')
+    p.add_argument('in_json',
+                   help='Input voxel to tracks dictionary.')
     p.add_argument('out_labels',
                    help='Output label map.')
+    p.add_argument('out_centroids',
+                   help='Output centroids tractogram.')
 
-    p.add_argument('--out_cleaned_trk',
-                   help='Output cleaned tractogram.')
+    p.add_argument('--max_deviation', type=float, default=40.0,
+                   help='Maximum angular deviation between cluster elements.')
+    p.add_argument('--batch_size', default=1000,
+                   help='Batch size for GPU.')
 
     add_verbose_arg(p)
     add_overwrite_arg(p)
+    add_reference_arg(p)
     return p
-
-
-def _status_to_color(status):
-    if status == 0:  # normal
-        return [0.0, 1.0, 0.0]  # Green
-    if status == 1:  # invalid direction
-        return [1.0, 0.0, 0.0]  # Red
-    if status == 2:  # invalid position
-        return [0.0, 0.0, 1.0]  # Blue
-
-
-def show(clusters):
-    mask = clusters.all_valid_mask
-    streamlines = clusters.streamlines[mask]
-    seeds = clusters.seeds[mask]
-    start_status = clusters.start_status[mask]
-    end_status = clusters.end_status[mask]
-
-    start_pos = np.array([s[0] for s in streamlines])
-    end_pos = np.array([s[-1] for s in streamlines])
-    start_colors = np.array([_status_to_color(s) for s in start_status])
-    end_colors = np.array([_status_to_color(s) for s in end_status])
-
-    # Make display objects
-    streamlines_actor = actor.line(streamlines)
-    points = actor.dots(seeds, color=(1., 1., 1.))
-    start_pts = actor.point(start_pos, colors=start_colors,
-                            phi=4, theta=4)
-
-    # Add display objects to canvas
-    s = window.Scene()
-    s.add(streamlines_actor)
-    s.add(points)
-    # s.add(start_pts)
-
-    # Show
-    window.show(s)
 
 
 def validate_dps(parser, sft):
@@ -81,35 +47,40 @@ def validate_dps(parser, sft):
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
-    assert_inputs_exist(parser, [args.in_tractogram, args.in_interface])
-    assert_outputs_exist(parser, args, args.out_labels, args.out_cleaned_trk)
+    if args.verbose:
+        logging.basicConfig(level=logging.INFO)
+    assert_inputs_exist(parser, [args.in_tractogram, args.in_json])
+    assert_outputs_exist(parser, args, [args.out_labels, args.out_centroids])
 
-    tracts_format = detect_format(args.in_tractogram)
-    if tracts_format is not TrkFile:
-        raise ValueError("Invalid input streamline file format " +
-                         "(must be trk): {0}".format(args.in_tractogram))
+    t0 = perf_counter()
+    logging.info('Loading input data...')
+    # load tractogram
+    sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
 
-    sft = load_tractogram(args.in_tractogram, 'same')
-    validate_dps(parser, sft)
+    # load json file
+    vox2tracks = json.load(open(args.in_json, 'r'))
+    logging.info('Loaded input data in {:.2f} seconds'
+                 .format(perf_counter() - t0))
 
-    interface_img = nib.load(args.in_interface)
-    interface = get_data_as_mask(interface_img)
+    clusters = ClusterForFTD(sft, vox2tracks,
+                             max_mean_deviation=args.max_deviation)
 
-    clusters = ClusterForFTD(sft, interface)
-    clusters.filter_streamlines()
+    # launch compute
+    labels, centroids, centroids_voxel =\
+        clusters.cluster_gpu(batch_size=args.batch_size)
 
-    labels = clusters.cluster_gpu()
-
-    if args.out_cleaned_trk:
-        out_sft = StatefulTractogram.from_sft(
-            clusters.streamlines[clusters.all_valid_mask],
-            sft)
-        save_tractogram(out_sft, args.out_cleaned_trk)
-
+    logging.info('Saving outputs...')
+    t0 = perf_counter()
     nib.save(nib.Nifti1Image(labels.astype(np.float32), sft.affine),
              args.out_labels)
 
-    # show(clusters)
+    # data per streamline is voxel id for each centroid
+    dps = {'voxel': np.asarray(centroids_voxel)}
+
+    out_sft = StatefulTractogram.from_sft(centroids, sft,
+                                          data_per_streamline=dps)
+    save_tractogram(out_sft, args.out_centroids)
+    logging.info('Saved outputs in {:.2f}'.format(perf_counter() - t0))
 
 
 if __name__ == '__main__':
