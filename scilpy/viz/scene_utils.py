@@ -120,7 +120,7 @@ def set_display_extent(slicer_actor, orientation, volume_shape, slice_index):
 
 def create_odf_slicer(sh_fodf, orientation, slice_index, mask, sphere,
                       nb_subdivide, sh_order, sh_basis, full_basis,
-                      scale, radial_scale, norm, colormap):
+                      scale, radial_scale, norm, colormap, opacity=1.0):
     """
     Create a ODF slicer actor displaying a fODF slice. The input volume is a
     3-dimensional grid containing the SH coefficients of the fODF for each
@@ -172,7 +172,7 @@ def create_odf_slicer(sh_fodf, orientation, slice_index, mask, sphere,
 
     odf_actor = actor.odf_slicer(sh_fodf, mask=mask, norm=norm,
                                  radial_scale=radial_scale,
-                                 sphere=sphere,
+                                 sphere=sphere, opacity=opacity,
                                  colormap=colormap,
                                  scale=scale, B_matrix=B_mat)
     set_display_extent(odf_actor, orientation, sh_fodf.shape[:3], slice_index)
@@ -412,7 +412,8 @@ def create_tube_with_radii(positions, radii, error, error_coloring=False,
     return actor
 
 
-def create_scene(actors, orientation, slice_index, volume_shape):
+def create_scene(actors, orientation, slice_index,
+                 volume_shape, projection='parallel'):
     """
     Create a 3D scene containing actors fitting inside a grid. The camera is
     placed based on the orientation supplied by the user. The projection mode
@@ -438,7 +439,7 @@ def create_scene(actors, orientation, slice_index, volume_shape):
     camera = initialize_camera(orientation, slice_index, volume_shape)
 
     scene = window.Scene()
-    scene.projection('parallel')
+    scene.projection(projection)
     scene.set_camera(position=camera[CamParams.VIEW_POS],
                      focal_point=camera[CamParams.VIEW_CENTER],
                      view_up=camera[CamParams.VIEW_UP])
