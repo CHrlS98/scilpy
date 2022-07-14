@@ -5,7 +5,7 @@ import numpy as np
 
 from dipy.reconst.shm import sh_to_sf_matrix
 from fury import window, actor
-from fury.colormap import distinguishable_colormap
+from fury.colormap import distinguishable_colormap, create_colormap
 import vtk
 
 from scilpy.io.utils import snapshot
@@ -116,6 +116,26 @@ def set_display_extent(slicer_actor, orientation, volume_shape, slice_index):
                                     slice_index, slice_index)
     else:
         raise ValueError('Invalid axis name : {0}'.format(orientation))
+
+
+def create_cmap_lookup(vmin, vmax, name, set_min_to_black=False):
+    # create lookup table
+    lut = vtk.vtkLookupTable()
+    if set_min_to_black:
+        v = np.arange(vmin, vmax)  # number of colors excluding 0
+    else:
+        v = np.arange(vmin, vmax + 1.0)
+    cmap = create_colormap(v, name=name)
+    if set_min_to_black:
+        cmap = np.vstack(([[0.0, 0.0, 0.0]], cmap))  # set 0 to black
+
+    lut.SetNumberOfTableValues(len(cmap))
+    lut.SetTableRange(0, len(cmap))
+    for i, c in enumerate(cmap):
+        lut.SetTableValue(i, c[0], c[1], c[2], 1.0)
+    lut.Build()
+
+    return cmap, lut
 
 
 def create_odf_slicer(sh_fodf, orientation, slice_index, mask, sphere,

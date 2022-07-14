@@ -585,4 +585,7 @@ def snapshot(scene, filename, **kwargs):
     """
     out = window.snapshot(scene, **kwargs)
     image = Image.fromarray(out[::-1])
-    image.save(filename)
+    if filename is not None:
+        image.save(filename)
+
+    return out[::-1]
