@@ -323,106 +323,61 @@ def project_to_polynomial(P):
 
 
 class ClusterForFTD(object):
-    def __init__(self, sft, interface_roi):
+    def __init__(self, sft, vox2tracks,
+                 nb_points_resampling=6,
+                 max_nb_clusters=10,
+                 max_mean_deviation=40.0):
         # sft in voxel space with origin corner
         sft.to_vox()
         sft.to_corner()
 
-        self.streamlines = sft.streamlines
-        self.start_status = sft.data_per_streamline['start_status']
-        self.end_status = sft.data_per_streamline['end_status']
-        self.seeds = sft.data_per_streamline['seeds'] + 0.5
-        self.interface = interface_roi
+        self.sft = sft
+        self.vox2tracks = vox2tracks
+        self.nb_points_resampling = nb_points_resampling
+        self.max_nb_clusters = max_nb_clusters
+        self.max_mean_deviation = np.deg2rad(max_mean_deviation)
+        self.max_nb_streamlines = np.max([len(s) for s in vox2tracks.values()])
 
-        # before any filtering is done, all streamlines are valid.
-        self.all_valid_mask = np.ones(len(self.streamlines))
-
-    def _filter_endpoint_rois(self, start_pos, end_pos):
-        """
-        Bundle-endpoint streamlines should be excluded if they don't
-        have at least one valid endpoint.
-        """
-        start_indices = start_pos.astype(int)
-        end_indices = end_pos.astype(int)
-
-        start_at_endpoint = self.interface[start_indices[:, 0],
-                                           start_indices[:, 1],
-                                           start_indices[:, 2]]
-
-        end_at_endpoint = self.interface[end_indices[:, 0],
-                                         end_indices[:, 1],
-                                         end_indices[:, 2]]
-
-        # If a strl starts and ends in endpoint roi it should not be discarded.
-        both_ends_to_keep = np.logical_and(start_at_endpoint, end_at_endpoint)\
-            .reshape((-1))
-
-        # the other extremity of a strl in endpoint roi can't be invalid!
-        start_to_keep = np.logical_and(start_at_endpoint,
-                                       np.squeeze(self.end_status == 0))
-        end_to_keep = np.logical_and(end_at_endpoint,
-                                     np.squeeze(self.start_status == 0))
-
-        to_keep = np.logical_or(start_to_keep, end_to_keep).reshape((-1))
-        return np.logical_or(to_keep, both_ends_to_keep)
-
-    def _filter_unexpected_termination(self):
-        statuses = np.column_stack([self.start_status, self.end_status])
-        valid = np.all(statuses == 0, axis=-1)
-        return valid
-
-    def filter_streamlines(self):
-        start_pos = np.array([s[0] for s in self.streamlines])
-        end_pos = np.array([s[-1] for s in self.streamlines])
-
-        # 1. Streamlines with one endpoint in interface rois are only valid
-        # if their second endpoint is valid.
-        valid_endpoint_in_roi = self._filter_endpoint_rois(start_pos, end_pos)
-
-        # 2. If streamline has two valid endpoints, it is valid
-        valid_both_endpoints = self._filter_unexpected_termination()
-
-        # 3. valid streamlines are the union of both sets
-        all_valid = np.logical_or(valid_endpoint_in_roi, valid_both_endpoints)
-
-        self.all_valid_mask = all_valid
+    def _key_to_voxel(self, key):
+        voxel = [int(i) for i in key
+                 .replace('[ ', '').replace('[', '')
+                 .replace(' ]', '').replace(']', '')
+                 .replace('  ', ' ')
+                 .split(' ')]
+        return voxel
 
     def cluster_gpu(self, batch_size=1000):
         # get valid streamlines
-        valid_streamlines = self.streamlines[self.all_valid_mask]
-
-        # valid seed positions
-        valid_seed_voxels = self.seeds[self.all_valid_mask].astype(np.int32)
-        unique_seed_voxels, npv = np.unique(valid_seed_voxels,
-                                            return_counts=True,
-                                            axis=0)
-        max_nb_strl = int(np.max(npv))
+        valid_streamlines = self.sft.streamlines
 
         cl_kernel = CLKernel('cluster_per_voxel', 'reconst', 'cluster_st.cl')
-        cl_kernel.set_define('MAX_NB_STRL', f'{max_nb_strl}')
+        cl_kernel.set_define('MAX_NB_STRL', f'{self.max_nb_streamlines}')
+        cl_kernel.set_define('N_RESAMPLE', f'{self.nb_points_resampling}')
+        cl_kernel.set_define('MAX_N_CLUSTERS', f'{self.max_nb_clusters}')
+        cl_kernel.set_define('MAX_DEVIATION', f'{self.max_mean_deviation}')
 
         N_INPUTS = 3
-        N_OUTPUTS = 1  # let's start with only outputing the number of clusters
+        N_OUTPUTS = 2
         cl_manager = CLManager(cl_kernel, N_INPUTS, N_OUTPUTS)
 
-        # prepare streamlines access on the gpu
-        # TODO: this step can be batched!
-        n_batches = int(np.ceil(len(unique_seed_voxels) / float(batch_size)))
-        unique_seed_voxels_batches = np.array_split(unique_seed_voxels,
-                                                    n_batches)
+        n_batches = \
+            int(np.ceil(len(self.vox2tracks.keys()) / float(batch_size)))
+        keys_batches = np.array_split(list(self.vox2tracks.keys()), n_batches)
 
         # output label volume
-        output_labels = np.zeros(self.interface.shape, dtype=np.uint32)
+        output_labels = np.zeros(self.sft.dimensions, dtype=np.uint32)
 
         # process seeds in batches
-        for batch_i, unique_seed_voxels_batch in enumerate(unique_seed_voxels_batches):
-            logging.info('Batch {}/{}'.format(batch_i, n_batches))
+        output_centroids = []
+        output_centroids_voxels = []
+        for batch_i, keys_batch in enumerate(keys_batches):
+            logging.info('Batch {}/{}'.format(batch_i + 1, n_batches))
             nb_strl_per_vox = []
             strl_nb_points = []
             strl_points = []
-            for uvox in unique_seed_voxels_batch:
-                mask = np.all(valid_seed_voxels == uvox, axis=-1)
-                strl_in_vox = valid_streamlines[mask]
+            for vox_key in keys_batch:
+                ind = self.vox2tracks[vox_key]
+                strl_in_vox = valid_streamlines[ind]
                 nb_strl_per_vox.append(len(strl_in_vox))
                 strl_nb_points.extend(strl_in_vox._lengths)
                 strl_points.extend(np.concatenate(strl_in_vox, axis=0)
@@ -442,18 +397,33 @@ class ClusterForFTD(object):
             cl_manager.add_input_buffer(1, strl_offset, np.uint32)
             cl_manager.add_input_buffer(2, strl_in_vox_offset, np.uint32)
 
-            cl_manager.add_output_buffer(0, (len(unique_seed_voxels_batch),),
+            # number of clusters
+            cl_manager.add_output_buffer(0, (len(keys_batch),),
                                          np.uint32)
 
-            # TODO: Also output centroids.
-            nb_clusters = cl_manager.run((len(unique_seed_voxels_batch), 1, 1))
+            # centroid of each cluster
+            out_centroids_nb_points =\
+                len(keys_batch)*self.max_nb_clusters*self.nb_points_resampling
+            cl_manager.add_output_buffer(1, (out_centroids_nb_points*4,))
 
-            output_labels[unique_seed_voxels_batch[:, 0],
-                          unique_seed_voxels_batch[:, 1],
-                          unique_seed_voxels_batch[:, 2]] = nb_clusters
+            nb_clusters, centroids = cl_manager.run((len(keys_batch), 1, 1))
+            centroids = centroids.reshape((-1, 4))[:, :-1]
 
-        # TODO: 2e bundling sur la distance entre les clusters, intervoxel
+            voxel_ids = np.array([self._key_to_voxel(vox_key)
+                                  for vox_key in keys_batch])
 
-        # TODO: Return each streamlines cluster id
+            for i, curr_nb_clusters in enumerate(nb_clusters):
+                for cluster_id in range(curr_nb_clusters):
+                    start_i =\
+                        i * self.max_nb_clusters * self.nb_points_resampling +\
+                        cluster_id * self.nb_points_resampling
+                    end_i = start_i + self.nb_points_resampling
+                    centroid = centroids[start_i:end_i]
+                    output_centroids.append(centroid)
+                    output_centroids_voxels.append(voxel_ids[i])
 
-        return output_labels
+            output_labels[voxel_ids[:, 0],
+                          voxel_ids[:, 1],
+                          voxel_ids[:, 2]] = nb_clusters
+
+        return output_labels, output_centroids, output_centroids_voxels
