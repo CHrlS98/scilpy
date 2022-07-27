@@ -5,6 +5,7 @@ from time import perf_counter
 import nibabel as nib
 import json
 import numpy as np
+from scilpy.tractanalysis.grid_intersections import grid_intersections
 from scilpy.io.utils import (add_json_args, add_verbose_arg,
                              assert_inputs_exist,
                              assert_outputs_exist,
@@ -27,8 +28,8 @@ def _build_arg_parser():
     p = argparse.ArgumentParser()
     p.add_argument('in_tractogram',
                    help='Input short-tracks tractogram.')
-    p.add_argument('out_trk',
-                   help='Output cleaned tractogram.')
+    p.add_argument('in_mask')
+
     p.add_argument('out_dict',
                    help='Output voxel to tracks json file.')
 
@@ -50,7 +51,7 @@ def validate_dps(parser, sft):
         parser.error('\'seeds\' not in tractogram dps.')
 
 
-def _filter_short_tracks(sft, interface):
+def filter_short_tracks(sft, mask):
     """
     Creer un dictionnaire <voxel id: streamline ids>.
     Pour chaque streamline, on teste si elle est valide.
@@ -60,163 +61,33 @@ def _filter_short_tracks(sft, interface):
     sft.to_vox()
     sft.to_corner()
 
-    streamlines = sft.streamlines
-
-    # shift seeds to origin corner
-    seeds = sft.data_per_streamline['seeds'] + 0.5
-    start_status = sft.data_per_streamline['start_status']
-    end_status = sft.data_per_streamline['end_status']
-
-    valid_tracks = np.zeros(len(streamlines), dtype=bool)
-    valid_tracks_id = 0  # the id to save in dictionary
+    all_crossed_indices = grid_intersections(sft.streamlines)
     vox_strl_map = {}
 
     t0 = perf_counter()
     logging.info('Filtering tractogram...')
-    for strl_id, strl in enumerate(streamlines):
+    for strl_id, crossed_indices in enumerate(all_crossed_indices):
         if(strl_id % 50000 == 0):
             logging.info('Streamline {}/{}'
-                         .format(strl_id, len(streamlines) - 1))
-        start_pos, end_pos = strl[0].astype(int), strl[-1].astype(int)
-        starts_in_interface = interface[start_pos[0],
-                                        start_pos[1],
-                                        start_pos[2]]
-        ends_in_interface = interface[end_pos[0],
-                                      end_pos[1],
-                                      end_pos[2]]
-        is_valid =\
-            (starts_in_interface and
-             end_status[strl_id] == VALID_ENDPOINT_STATUS) or\
-            (ends_in_interface and
-             start_status[strl_id] == VALID_ENDPOINT_STATUS) or\
-            (starts_in_interface and ends_in_interface) or\
-            (start_status[strl_id] == VALID_ENDPOINT_STATUS and
-             end_status[strl_id] == VALID_ENDPOINT_STATUS)
+                         .format(strl_id, len(sft.streamlines) - 1))
 
-        # update valid tracks mask
-        valid_tracks[strl_id] = is_valid
+        # Acceptons tout.
+        # Nos clusters vont nous dire si les streamlines sont des outliers.
+        voxel_indices = np.unique(crossed_indices.astype(int), axis=0)
+        for voxel_id in voxel_indices:
+            # mask sure position is inside mask
+            if mask[voxel_id[0], voxel_id[1], voxel_id[2]] > 0:
+                voxel2str = np.array2string(voxel_id)
 
-        # add to dictionary if valid
-        if is_valid:
-            voxel_id = np.array2string(seeds[strl_id].astype(int))
-            if voxel_id not in vox_strl_map:
-                vox_strl_map[voxel_id] = []
-            vox_strl_map[voxel_id].append(valid_tracks_id)
-            valid_tracks_id += 1
+                # if the voxel is not in the map yet, create empty list
+                if voxel2str not in vox_strl_map:
+                    vox_strl_map[voxel2str] = []
+
+                # add strl id to dictionary
+                vox_strl_map[voxel2str].append(strl_id)
 
     logging.info('Filtered tractogram in {:.2f}s'.format(perf_counter() - t0))
-    return valid_tracks, vox_strl_map
-
-
-def filter_short_tracks(sft, min_length=0.0):
-    """
-    Creer un dictionnaire <voxel id: streamline ids>.
-    Pour chaque streamline, on teste si elle est valide.
-    Si oui, on prend son voxel id et on l'ajoute dans le
-    dictionnaire.
-    """
-    sft.to_vox()
-    sft.to_corner()
-
-    # minimum length in voxel coordinates
-    min_len_vox = min_length / sft.voxel_sizes[0]
-
-    streamlines = sft.streamlines
-
-    # shift seeds to origin corner
-    seeds = sft.data_per_streamline['seeds'] + 0.5
-    start_status = sft.data_per_streamline['start_status']
-    end_status = sft.data_per_streamline['end_status']
-
-    valid_tracks = np.zeros(len(streamlines), dtype=bool)
-    valid_tracks_id = 0  # the id to save in dictionary
-    vox_strl_map = {}
-
-    t0 = perf_counter()
-    logging.info('Filtering tractogram...')
-    for strl_id, strl in enumerate(streamlines):
-        if(strl_id % 50000 == 0):
-            logging.info('Streamline {}/{}'
-                         .format(strl_id, len(streamlines) - 1))
-
-        # streamline length
-        strl_len = length(strl)
-
-        is_valid = (start_status[strl_id] != INVALID_DIR_STATUS and
-                    end_status[strl_id] != INVALID_DIR_STATUS and
-                    strl_len >= min_len_vox)
-
-        # update valid tracks mask
-        valid_tracks[strl_id] = is_valid
-
-        # add to dictionary if valid
-        if is_valid:
-            voxel_id = np.array2string(seeds[strl_id].astype(int))
-            if voxel_id not in vox_strl_map:
-                vox_strl_map[voxel_id] = []
-            vox_strl_map[voxel_id].append(valid_tracks_id)
-            valid_tracks_id += 1
-
-    logging.info('Filtered tractogram in {:.2f}s'.format(perf_counter() - t0))
-    return valid_tracks, vox_strl_map
-
-
-def _filter_short_tracks(sft, interface):
-    """
-    Creer un dictionnaire <voxel id: streamline ids>.
-    Pour chaque streamline, on teste si elle est valide.
-    Si oui, on prend son voxel id et on l'ajoute dans le
-    dictionnaire.
-    """
-    sft.to_vox()
-    sft.to_corner()
-
-    streamlines = sft.streamlines
-
-    # shift seeds to origin corner
-    seeds = sft.data_per_streamline['seeds'] + 0.5
-    start_status = sft.data_per_streamline['start_status']
-    end_status = sft.data_per_streamline['end_status']
-
-    valid_tracks = np.zeros(len(streamlines), dtype=bool)
-    valid_tracks_id = 0  # the id to save in dictionary
-    vox_strl_map = {}
-
-    t0 = perf_counter()
-    logging.info('Filtering tractogram...')
-    for strl_id, strl in enumerate(streamlines):
-        if(strl_id % 50000 == 0):
-            logging.info('Streamline {}/{}'
-                         .format(strl_id, len(streamlines) - 1))
-        start_pos, end_pos = strl[0].astype(int), strl[-1].astype(int)
-        starts_in_interface = interface[start_pos[0],
-                                        start_pos[1],
-                                        start_pos[2]]
-        ends_in_interface = interface[end_pos[0],
-                                      end_pos[1],
-                                      end_pos[2]]
-        is_valid =\
-            (starts_in_interface and
-             end_status[strl_id] == VALID_ENDPOINT_STATUS) or\
-            (ends_in_interface and
-             start_status[strl_id] == VALID_ENDPOINT_STATUS) or\
-            (starts_in_interface and ends_in_interface) or\
-            (start_status[strl_id] == VALID_ENDPOINT_STATUS and
-             end_status[strl_id] == VALID_ENDPOINT_STATUS)
-
-        # update valid tracks mask
-        valid_tracks[strl_id] = is_valid
-
-        # add to dictionary if valid
-        if is_valid:
-            voxel_id = np.array2string(seeds[strl_id].astype(int))
-            if voxel_id not in vox_strl_map:
-                vox_strl_map[voxel_id] = []
-            vox_strl_map[voxel_id].append(valid_tracks_id)
-            valid_tracks_id += 1
-
-    logging.info('Filtered tractogram in {:.2f}s'.format(perf_counter() - t0))
-    return valid_tracks, vox_strl_map
+    return vox_strl_map
 
 
 def main():
@@ -225,8 +96,8 @@ def main():
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
 
-    assert_inputs_exist(parser, [args.in_tractogram])
-    assert_outputs_exist(parser, args, [args.out_trk, args.out_dict])
+    assert_inputs_exist(parser, [args.in_tractogram, args.in_mask])
+    assert_outputs_exist(parser, args, [args.out_dict])
 
     tracts_format = detect_format(args.in_tractogram)
     if tracts_format is not TrkFile:
@@ -236,17 +107,16 @@ def main():
     t0 = perf_counter()
     logging.info('Loading images...')
     sft = load_tractogram(args.in_tractogram, 'same')
-    validate_dps(parser, sft)
+    mask = get_data_as_mask(nib.load(args.in_mask))
+
+    # validate_dps(parser, sft)
 
     logging.info('Loaded input data in {:.2f}s'.format(perf_counter() - t0))
 
-    valid_tracks, vox2tracks_map = filter_short_tracks(sft, args.min_length)
+    vox2tracks_map = filter_short_tracks(sft, mask)
 
     t0 = perf_counter()
     logging.info('Saving outputs...')
-    # output tractogram
-    out_sft = StatefulTractogram.from_sft(sft.streamlines[valid_tracks], sft)
-    save_tractogram(out_sft, args.out_trk)
 
     # output dictionary
     out_json = open(args.out_dict, 'w')
