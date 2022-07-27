@@ -35,15 +35,6 @@ def _build_arg_parser():
     return p
 
 
-def validate_dps(parser, sft):
-    if 'start_status' not in sft.data_per_streamline:
-        parser.error('\'start_status\' not in tractogram dps.')
-    if 'end_status' not in sft.data_per_streamline:
-        parser.error('\'end_status\' not in tractogram dps.')
-    if 'seeds' not in sft.data_per_streamline:
-        parser.error('\'seeds\' not in tractogram dps.')
-
-
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -54,11 +45,12 @@ def main():
 
     t0 = perf_counter()
     logging.info('Loading input data...')
+    # load json file
+    vox2tracks = json.load(open(args.in_json, 'r'))
+
     # load tractogram
     sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
 
-    # load json file
-    vox2tracks = json.load(open(args.in_json, 'r'))
     logging.info('Loaded input data in {:.2f} seconds'
                  .format(perf_counter() - t0))
 
@@ -70,7 +62,7 @@ def main():
         clusters.cluster_gpu(batch_size=args.batch_size)
 
     logging.info('Saving outputs...')
-    t0 = perf_counter()
+    t1 = perf_counter()
     nib.save(nib.Nifti1Image(labels.astype(np.float32), sft.affine),
              args.out_labels)
 
@@ -80,7 +72,8 @@ def main():
     out_sft = StatefulTractogram.from_sft(centroids, sft,
                                           data_per_streamline=dps)
     save_tractogram(out_sft, args.out_centroids)
-    logging.info('Saved outputs in {:.2f}'.format(perf_counter() - t0))
+    logging.info('Saved outputs in {:.2f}'.format(perf_counter() - t1))
+    logging.info('Total runtime: {:.2f}'.format(perf_counter() - t0))
 
 
 if __name__ == '__main__':

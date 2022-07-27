@@ -406,6 +406,9 @@ class ClusterForFTD(object):
                 len(keys_batch)*self.max_nb_clusters*self.nb_points_resampling
             cl_manager.add_output_buffer(1, (out_centroids_nb_points*4,))
 
+            # TODO: Pour chaque streamline, output cluster id
+            # A same streamline will belong to a cluster for each
+            # voxel it intersects
             nb_clusters, centroids = cl_manager.run((len(keys_batch), 1, 1))
             centroids = centroids.reshape((-1, 4))[:, :-1]
 
