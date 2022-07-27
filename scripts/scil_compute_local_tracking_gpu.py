@@ -58,12 +58,14 @@ def _build_arg_parser():
                         '\nare given, the maximum angle will be drawn at '
                         'random\nfrom the distribution for each streamline. '
                         '[%(default)s]')
-    p.add_argument('--min_length', type=float, default=20.0,
+    p.add_argument('--min_length', type=float, default=10.0,
                    help='Minimum length of the streamline '
                         'in mm. [%(default)s]')
     p.add_argument('--max_length', type=float, default=300.0,
                    help='Maximum length of the streamline '
                         'in mm. [%(default)s]')
+    p.add_argument('--sf_thresh', type=float, default=0.1,
+                   help='Relative threshold on sf amplitudes. [%(default)s]')
     p.add_argument('--forward_only', action='store_true',
                    help='Only perform forward tracking.')
     p.add_argument('--batch_size', type=int, default=100000,
@@ -131,8 +133,10 @@ def main():
 
     # initialize tracking
     tracker = GPUTacker(odf_sh, mask, seeds, vox_step_size, min_strl_len,
-                        max_strl_len, args.theta, args.sh_basis,
-                        args.batch_size, args.forward_only, args.rng_seed)
+                        max_strl_len, theta=args.theta, sh_basis=args.sh_basis,
+                        batch_size=args.batch_size,
+                        forward_only=args.forward_only,
+                        rng_seed=args.rng_seed)
 
     # wrapper for tracker.track() yielding one TractogramItem per
     # streamline for use with the LazyTractogram.

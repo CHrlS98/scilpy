@@ -13,6 +13,7 @@ SH volume. Tracking is performed in voxel space.
 #define N_THETAS 0
 #define STEP_SIZE 0
 #define MAX_LENGTH 0
+#define SF_THRESHOLD 0.1f
 #define FORWARD_ONLY false
 
 // CONSTANTS
@@ -94,9 +95,11 @@ void reverse_streamline(const int num_strl_points,
 }
 
 void sh_to_sf(const float* sh_coeffs, __global const float* sh_to_sf_mat,
-              const bool is_first_step, __global const float* vertices,
-              const float3 last_dir, const float max_cos_theta, float* sf_coeffs)
+              const float curr_sf_max, const bool is_first_step,
+              __global const float* vertices, const float3 last_dir,
+              const float max_cos_theta, float* sf_coeffs)
 {
+    const float sf_thres = curr_sf_max * SF_THRESHOLD;
     for(int u = 0; u < N_DIRS; ++u)
     {
         const float3 vertice = {
@@ -124,8 +127,9 @@ void sh_to_sf(const float* sh_coeffs, __global const float* sh_to_sf_mat,
                                                                    N_DIRS, 1)];
                 sf_coeffs[u] += ylmu_inv * sh_coeffs[j];
             }
-            // clip negative values
-            if(sf_coeffs[u] < 0.0f)
+
+            // clip values below threshold
+            if(sf_coeffs[u] < sf_thres)
             {
                 sf_coeffs[u] = 0.0f;
             }
@@ -198,6 +202,7 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
               const size_t n_seeds, const float max_cos_theta_local,
               __global const float* tracking_mask,
               __global const float* sh_coeffs,
+              __global const float* sf_max,
               __global const float* rand_f,
               __global const float* vertices,
               __global const float* sh_to_sf_mat,
@@ -216,9 +221,12 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
         // Sample SF at position.
         float odf_sh[IM_N_COEFFS];
         float odf_sf[N_DIRS];
+        const float curr_sf_max =
+            sf_max[get_flat_index(last_pos.x, last_pos.y, last_pos.z, 0,
+                                  IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
         get_value_nn(sh_coeffs, IM_N_COEFFS, last_pos, odf_sh);
-        sh_to_sf(odf_sh, sh_to_sf_mat, current_length == 1, vertices,
-                 last_dir, max_cos_theta_local, odf_sf);
+        sh_to_sf(odf_sh, sh_to_sf_mat, curr_sf_max, current_length == 1,
+                 vertices, last_dir, max_cos_theta_local, odf_sf);
 
         const float randv = rand_f[get_flat_index(seed_indice, current_length, 0, 0,
                                                   n_seeds, MAX_LENGTH, 1)];
@@ -277,6 +285,7 @@ int track(float3 seed_pos,
           const float max_cos_theta_local,
           __global const float* tracking_mask,
           __global const float* sh_coeffs,
+          __global const float* sf_max,
           __global const float* rand_f,
           __global const float* vertices,
           __global const float* sh_to_sf_mat,
@@ -305,7 +314,7 @@ int track(float3 seed_pos,
     uint endpoint_status = 0;
     current_length = propagate(last_pos, last_dir, current_length, true,
                                seed_indice, n_seeds, max_cos_theta_local,
-                               tracking_mask, sh_coeffs, rand_f, vertices,
+                               tracking_mask, sh_coeffs, sf_max, rand_f, vertices,
                                sh_to_sf_mat, &endpoint_status, out_streamlines);
 
     last_point_status[seed_indice] = endpoint_status;
@@ -322,14 +331,14 @@ int track(float3 seed_pos,
         // track backward
         current_length = propagate(last_pos, last_dir, current_length, false,
                                    seed_indice, n_seeds, max_cos_theta_local,
-                                   tracking_mask, sh_coeffs, rand_f, vertices,
+                                   tracking_mask, sh_coeffs, sf_max, rand_f, vertices,
                                    sh_to_sf_mat, &endpoint_status, out_streamlines);
 
         last_point_status[seed_indice] = endpoint_status;
 
         // we may need to track forward again if we didn't reach max_length
         // yet (the track might have been stopped early in forward pass)
-        if(current_length < MAX_LENGTH)
+        if(current_length < MAX_LENGTH && endpoint_status == VALID_ENDPOINT_STATUS)
         {
             reverse_streamline(current_length, n_seeds,
                                seed_indice, out_streamlines,
@@ -339,7 +348,7 @@ int track(float3 seed_pos,
             // track one last time
             current_length = propagate(last_pos, last_dir, current_length, false,
                                        seed_indice, n_seeds, max_cos_theta_local,
-                                       tracking_mask, sh_coeffs, rand_f, vertices,
+                                       tracking_mask, sh_coeffs, sf_max, rand_f, vertices,
                                        sh_to_sf_mat, &endpoint_status, out_streamlines);
 
             last_point_status[seed_indice] = endpoint_status;
@@ -351,10 +360,11 @@ int track(float3 seed_pos,
 __kernel void main(__global const float* sh_coeffs,
                    __global const float* vertices,
                    __global const float* sh_to_sf_mat,
+                   __global const float* sf_max,
                    __global const float* tracking_mask,
+                   __global const float* max_cos_theta,
                    __global const float* seed_positions,
                    __global const float* rand_f,
-                   __global const float* max_cos_theta,
                    __global float* out_streamlines,
                    __global float* out_nb_points,
                    __global uint* out_start_status,
@@ -382,7 +392,7 @@ __kernel void main(__global const float* sh_coeffs,
 
     int current_length = track(seed_pos, seed_indice, n_seeds,
                                max_cos_theta_local, tracking_mask,
-                               sh_coeffs, rand_f, vertices,
+                               sh_coeffs, sf_max, rand_f, vertices,
                                sh_to_sf_mat, out_start_status,
                                out_end_status, out_streamlines);
 
