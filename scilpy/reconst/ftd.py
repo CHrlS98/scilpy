@@ -357,7 +357,7 @@ class ClusterForFTD(object):
         cl_kernel.set_define('MAX_DEVIATION', f'{self.max_mean_deviation}')
 
         N_INPUTS = 3
-        N_OUTPUTS = 2
+        N_OUTPUTS = 3
         cl_manager = CLManager(cl_kernel, N_INPUTS, N_OUTPUTS)
 
         n_batches = \
@@ -370,6 +370,7 @@ class ClusterForFTD(object):
         # process seeds in batches
         output_centroids = []
         output_centroids_voxels = []
+        vox2ids = {}
         for batch_i, keys_batch in enumerate(keys_batches):
             logging.info('Batch {}/{}'.format(batch_i + 1, n_batches))
             nb_strl_per_vox = []
@@ -392,7 +393,6 @@ class ClusterForFTD(object):
                                           np.ones(len(strl_points))))\
                             .astype(np.float32).flatten()
 
-            # 1er bundling sur l'orientation par voxel
             cl_manager.add_input_buffer(0, strl_points)
             cl_manager.add_input_buffer(1, strl_offset, np.uint32)
             cl_manager.add_input_buffer(2, strl_in_vox_offset, np.uint32)
@@ -406,15 +406,22 @@ class ClusterForFTD(object):
                 len(keys_batch)*self.max_nb_clusters*self.nb_points_resampling
             cl_manager.add_output_buffer(1, (out_centroids_nb_points*4,))
 
-            # TODO: Pour chaque streamline, output cluster id
-            # A same streamline will belong to a cluster for each
-            # voxel it intersects
-            nb_clusters, centroids = cl_manager.run((len(keys_batch), 1, 1))
+            # cluster id of each streamline
+            cl_manager.add_output_buffer(2, (strl_in_vox_offset[-1],),
+                                         dtype=np.uint32)
+
+            nb_clusters, centroids, strl_cluster_ids =\
+                cl_manager.run((len(keys_batch), 1, 1))
             centroids = centroids.reshape((-1, 4))[:, :-1]
 
+            # nufit map
             voxel_ids = np.array([self._key_to_voxel(vox_key)
                                   for vox_key in keys_batch])
+            output_labels[voxel_ids[:, 0],
+                          voxel_ids[:, 1],
+                          voxel_ids[:, 2]] = nb_clusters
 
+            # cluster centroids
             for i, curr_nb_clusters in enumerate(nb_clusters):
                 for cluster_id in range(curr_nb_clusters):
                     start_i =\
@@ -425,8 +432,12 @@ class ClusterForFTD(object):
                     output_centroids.append(centroid)
                     output_centroids_voxels.append(voxel_ids[i])
 
-            output_labels[voxel_ids[:, 0],
-                          voxel_ids[:, 1],
-                          voxel_ids[:, 2]] = nb_clusters
+            # each streamline's cluster id
+            strl_cluster_ids = strl_cluster_ids.tolist()
+            for i, vox_key in enumerate(keys_batch):
+                start_i = strl_in_vox_offset[i]
+                end_i = strl_in_vox_offset[i + 1]
+                vox2ids[vox_key] = strl_cluster_ids[start_i:end_i]
 
-        return output_labels, output_centroids, output_centroids_voxels
+        return output_labels, output_centroids,\
+            output_centroids_voxels, vox2ids

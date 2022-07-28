@@ -19,6 +19,7 @@ uint get_nb_streamlines(uint voxel_id, __global const uint* strl_per_vox_offsets
     return strl_per_vox_offsets[voxel_id + 1] - strl_per_vox_offsets[voxel_id];
 }
 
+// Not garanteed that each segment is the same length but probably good enough
 float4 interp_along_track(__global const float4* track, const int nb_points, float t)
 {
     const float t_float_index = (float)(nb_points - 1) * t;
@@ -92,8 +93,7 @@ int quick_bundle_global(__global const float4* track,
     int best_cluster_id = 0;
     bool needs_flip = false;
     for(int i = 0; i < nb_clusters; ++i)
-    { // we won't reach the inside of the loop if there are no clusters
-
+    {
         // compute distance to each cluster
         bool _needs_flip;
         const float dist = min_mean_angular_deviation(
@@ -111,8 +111,6 @@ int quick_bundle_global(__global const float4* track,
     // 3. if min_dist > the distance threshold, add a new cluster
     if(min_dist > max_deviation && nb_clusters < MAX_N_CLUSTERS)
     {
-        // printf("%s, %f\n", "Create new bundle", min_mdf);
-
         best_cluster_id = nb_clusters; // create new cluster
         cluster_track_counts[best_cluster_id] = 1;
 
@@ -123,7 +121,7 @@ int quick_bundle_global(__global const float4* track,
                 (float4)(0.0f, 0.0f, 0.0f, 0.0f);
         }
     }
-    else // we must increment the number of tracks in the best cluster
+    else // we increment the number of tracks in the best cluster
     {
         ++cluster_track_counts[best_cluster_id];
     }
@@ -151,13 +149,11 @@ int quick_bundle_local(const float4* track,
                        float4* cluster_track_sums,
                        int* cluster_track_counts)
 {
-    // 2. compare the resampled track to all cluster centroids
     float min_dist = FLT_MAX;
     int best_cluster_id = 0;
     bool needs_flip = false;
     for(int i = 0; i < nb_clusters; ++i)
-    { // we won't reach the inside of the loop if there are no clusters
-
+    {
         // compute distance to each cluster
         bool _needs_flip;
         const float dist = min_mean_angular_deviation(
@@ -172,11 +168,9 @@ int quick_bundle_local(const float4* track,
         }
     }
 
-    // 3. if min_dist > the distance threshold, add a new cluster
+    // if min_dist > the distance threshold, add a new cluster
     if(min_dist > max_deviation && nb_clusters < MAX_N_CLUSTERS)
     {
-        // printf("%s, %f\n", "Create new bundle", min_mdf);
-
         best_cluster_id = nb_clusters; // create new cluster
         cluster_track_counts[best_cluster_id] = 1;
 
@@ -192,7 +186,7 @@ int quick_bundle_local(const float4* track,
         ++cluster_track_counts[best_cluster_id];
     }
 
-    // 4. add the resampled track to the cluster track sum
+    // add the resampled track to the cluster track sum
     for (int i = 0; i < N_RESAMPLE; i++)
     {
         if(needs_flip)
@@ -212,7 +206,8 @@ __kernel void cluster_per_voxel(__global const float4* all_points,
                                 __global const uint* strl_pts_offsets,
                                 __global const uint* strl_per_vox_offsets,
                                 __global uint* out_nb_clusters,
-                                __global float4* out_centroids_points)
+                                __global float4* out_centroids_points,
+                                __global uint* out_cluster_ids)
 {
     const int voxel_id = get_global_id(0);
     const uint first_strl_offset = strl_per_vox_offsets[voxel_id];
@@ -224,6 +219,9 @@ __kernel void cluster_per_voxel(__global const float4* all_points,
 
     // Non-normalized centroid of each cluster
     // TODO: Replace by directions!
+    // somme de *directions normalisees* MAIS la somme
+    // elle-meme pas normalisee
+    // Set size to MAX_N_CLUSTERS*(N_RESAMPLE-1)
     float4 cluster_track_sums[MAX_N_CLUSTERS*N_RESAMPLE];
 
     // Number of tracks belonging to each cluster
@@ -248,7 +246,7 @@ __kernel void cluster_per_voxel(__global const float4* all_points,
     }
 
     // Merge clusters
-    // copy centroids
+    // first, copy centroids
     float4 centroids[MAX_N_CLUSTERS*N_RESAMPLE];
     for(uint i = 0; i < nb_clusters; ++i)
     {
@@ -275,24 +273,24 @@ __kernel void cluster_per_voxel(__global const float4* all_points,
         }
     }
 
+    // on copie les streamlines cluster ids
+    for(uint i = 0; i < nb_streamlines; ++i)
+    {
+        out_cluster_ids[first_strl_offset+i] = merged_cluster_ids[strl_cluster_ids[i]];
+    }
+
     // Copy centroids to global memory
-    // because clusters can be discarded based on absolute and relative thresholds
-    // we use a contiguous_cluster_id to save streamlines.
-    uint contiguous_cluster_id = 0;
     for(uint cluster_id = 0; cluster_id < nb_merged_clusters; ++cluster_id)
     {
         for(uint point_id = 0; point_id < N_RESAMPLE; ++point_id)
         {
             const uint track_sums_offset = cluster_id * N_RESAMPLE + point_id;
             const uint out_centroids_offset = voxel_id * MAX_N_CLUSTERS * N_RESAMPLE
-                                            + contiguous_cluster_id * N_RESAMPLE
+                                            + cluster_id * N_RESAMPLE
                                             + point_id;
             out_centroids_points[out_centroids_offset] = merged_clusters_track_sums[track_sums_offset]
                                                     / (float)merged_clusters_track_counts[cluster_id];
         }
-        ++contiguous_cluster_id;
     }
-    out_nb_clusters[voxel_id] = contiguous_cluster_id;
-
-    // TODO: Output cluster track counts
+    out_nb_clusters[voxel_id] = nb_merged_clusters;
 }
