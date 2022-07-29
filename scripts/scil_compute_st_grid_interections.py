@@ -42,15 +42,6 @@ def _build_arg_parser():
     return p
 
 
-def validate_dps(parser, sft):
-    if 'start_status' not in sft.data_per_streamline:
-        parser.error('\'start_status\' not in tractogram dps.')
-    if 'end_status' not in sft.data_per_streamline:
-        parser.error('\'end_status\' not in tractogram dps.')
-    if 'seeds' not in sft.data_per_streamline:
-        parser.error('\'seeds\' not in tractogram dps.')
-
-
 def filter_short_tracks(sft, mask):
     """
     Creer un dictionnaire <voxel id: streamline ids>.
@@ -108,8 +99,6 @@ def main():
     logging.info('Loading images...')
     sft = load_tractogram(args.in_tractogram, 'same')
     mask = get_data_as_mask(nib.load(args.in_mask))
-
-    # validate_dps(parser, sft)
 
     logging.info('Loaded input data in {:.2f}s'.format(perf_counter() - t0))
 
