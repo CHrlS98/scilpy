@@ -2,6 +2,7 @@
 import argparse
 import logging
 import json
+import os
 from time import perf_counter
 import nibabel as nib
 import numpy as np
@@ -9,7 +10,6 @@ from scilpy.io.streamlines import load_tractogram_with_reference
 from scilpy.io.utils import (add_json_args, add_reference_arg, add_verbose_arg,
                              assert_inputs_exist, assert_outputs_exist,
                              add_overwrite_arg)
-from dipy.io.streamline import save_tractogram, StatefulTractogram
 from scilpy.reconst.ftd import ClusterForFTD
 
 
@@ -21,8 +21,6 @@ def _build_arg_parser():
                    help='Input voxel to tracks dictionary.')
     p.add_argument('out_labels',
                    help='Output label map.')
-    p.add_argument('out_centroids',
-                   help='Output centroids tractogram.')
     p.add_argument('out_dict')
 
     p.add_argument('--nb_points_resampling', type=int, default=6,
@@ -47,9 +45,20 @@ def main():
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
     assert_inputs_exist(parser, [args.in_tractogram, args.in_json])
-    assert_outputs_exist(parser, args, [args.out_labels,
-                                        args.out_centroids,
-                                        args.out_dict])
+    assert_outputs_exist(parser, args, [args.out_labels, args.out_dict])
+
+    # validate output file types
+    filename, ext = os.path.splitext(args.out_labels)
+    if ext == '.gz':
+        _, ext = os.path.splitext(filename)
+    if ext != '.nii':
+        parser.error('Invalid fformat for labels: {}'
+                     .format(args.out_labels))
+
+    filename, ext = os.path.splitext(args.out_dict)
+    if ext != '.json':
+        parser.error('Invalid extension for out_dict: {}'
+                     .format(args.out_dict))
 
     t0 = perf_counter()
     logging.info('Loading input data...')
@@ -68,11 +77,13 @@ def main():
                              max_mean_deviation=args.max_deviation)
 
     # launch compute
-    labels, centroids, centroids_voxel, vox2ids =\
+    labels, vox2ids =\
         clusters.cluster_gpu(batch_size=args.batch_size)
 
     logging.info('Saving outputs...')
     t1 = perf_counter()
+
+    # output nifti labels
     nib.save(nib.Nifti1Image(labels.astype(np.float32), sft.affine),
              args.out_labels)
 
@@ -80,11 +91,6 @@ def main():
     out_json = open(args.out_dict, 'w')
     json.dump(vox2ids, out_json, indent=args.indent, sort_keys=args.sort_keys)
 
-    # data per streamline is voxel id for each centroid
-    dps = {'voxel': np.asarray(centroids_voxel)}
-    out_sft = StatefulTractogram.from_sft(centroids, sft,
-                                          data_per_streamline=dps)
-    save_tractogram(out_sft, args.out_centroids)
     logging.info('Saved outputs in {:.2f}'.format(perf_counter() - t1))
 
     logging.info('Total runtime: {:.2f}'.format(perf_counter() - t0))
