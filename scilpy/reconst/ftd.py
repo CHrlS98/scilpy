@@ -326,7 +326,8 @@ class ClusterForFTD(object):
     def __init__(self, sft, vox2tracks,
                  nb_points_resampling=6,
                  max_nb_clusters=10,
-                 max_mean_deviation=40.0):
+                 max_mean_deviation=40.0,
+                 dist_metric='mad_min'):
         # sft in voxel space with origin corner
         sft.to_vox()
         sft.to_corner()
@@ -337,6 +338,7 @@ class ClusterForFTD(object):
         self.max_nb_clusters = max_nb_clusters
         self.max_mean_deviation = np.deg2rad(max_mean_deviation)
         self.max_nb_streamlines = np.max([len(s) for s in vox2tracks.values()])
+        self.dist_metric = dist_metric
 
     def _key_to_voxel(self, key):
         voxel = [int(i) for i in key
@@ -346,26 +348,37 @@ class ClusterForFTD(object):
                  .split(' ')]
         return voxel
 
+    def _dist_metric_to_integer(self):
+        if self.dist_metric == 'mad_min':
+            return 0
+        if self.dist_metric == 'mdf_min':
+            return 1
+
     def cluster_gpu(self, batch_size=1000):
         # get valid streamlines
         valid_streamlines = self.sft.streamlines
 
         cl_kernel = CLKernel('cluster_per_voxel', 'reconst', 'cluster_st.cl')
         cl_kernel.set_define('MAX_NB_STRL', f'{self.max_nb_streamlines}')
-        cl_kernel.set_define('N_RESAMPLE_DIRS', f'{self.nb_points_resampling-1}')
         cl_kernel.set_define('MAX_N_CLUSTERS', f'{self.max_nb_clusters}')
         cl_kernel.set_define('MAX_DEVIATION', f'{self.max_mean_deviation}')
 
+        nb_resample = self.nb_points_resampling
+
+        if self.dist_metric == 'mad_min':
+            nb_resample -= 1
+
+        cl_kernel.set_define('N_RESAMPLE', f'{nb_resample}')
+        cl_kernel.set_define('DIST_METRIC',
+                             f'{self._dist_metric_to_integer()}')
+
         N_INPUTS = 3
-        N_OUTPUTS = 2
+        N_OUTPUTS = 1
         cl_manager = CLManager(cl_kernel, N_INPUTS, N_OUTPUTS)
 
         n_batches = \
             int(np.ceil(len(self.vox2tracks.keys()) / float(batch_size)))
         keys_batches = np.array_split(list(self.vox2tracks.keys()), n_batches)
-
-        # output label volume
-        output_labels = np.zeros(self.sft.dimensions, dtype=np.uint32)
 
         # process seeds in batches
         vox2ids = {}
@@ -395,23 +408,11 @@ class ClusterForFTD(object):
             cl_manager.add_input_buffer(1, strl_offset, np.uint32)
             cl_manager.add_input_buffer(2, strl_in_vox_offset, np.uint32)
 
-            # number of clusters
-            cl_manager.add_output_buffer(0, (len(keys_batch),),
-                                         np.uint32)
-
             # cluster id of each streamline
-            cl_manager.add_output_buffer(1, (strl_in_vox_offset[-1],),
+            cl_manager.add_output_buffer(0, (strl_in_vox_offset[-1],),
                                          dtype=np.uint32)
 
-            nb_clusters, strl_cluster_ids =\
-                cl_manager.run((len(keys_batch), 1, 1))
-
-            # nufit map
-            voxel_ids = np.array([self._key_to_voxel(vox_key)
-                                  for vox_key in keys_batch])
-            output_labels[voxel_ids[:, 0],
-                          voxel_ids[:, 1],
-                          voxel_ids[:, 2]] = nb_clusters
+            strl_cluster_ids = cl_manager.run((len(keys_batch), 1, 1))[0]
 
             # each streamline's cluster id
             strl_cluster_ids = strl_cluster_ids.tolist()
@@ -420,4 +421,4 @@ class ClusterForFTD(object):
                 end_i = strl_in_vox_offset[i + 1]
                 vox2ids[vox_key] = strl_cluster_ids[start_i:end_i]
 
-        return output_labels, vox2ids
+        return vox2ids
