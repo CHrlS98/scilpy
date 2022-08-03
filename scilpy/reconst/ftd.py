@@ -326,7 +326,7 @@ class ClusterForFTD(object):
     def __init__(self, sft, vox2tracks,
                  nb_points_resampling=6,
                  max_nb_clusters=10,
-                 max_mean_deviation=40.0,
+                 max_distance=40.0,
                  dist_metric='mad_min'):
         # sft in voxel space with origin corner
         sft.to_vox()
@@ -336,9 +336,18 @@ class ClusterForFTD(object):
         self.vox2tracks = vox2tracks
         self.nb_points_resampling = nb_points_resampling
         self.max_nb_clusters = max_nb_clusters
-        self.max_mean_deviation = np.deg2rad(max_mean_deviation)
         self.max_nb_streamlines = np.max([len(s) for s in vox2tracks.values()])
+
+        # initialize clustering distance
         self.dist_metric = dist_metric
+        if dist_metric == 'mad_min':
+            # we must convert to radians
+            self.max_distance = np.deg2rad(max_distance)
+        elif dist_metric == 'mdf_avg':
+            _, _, vox_dims, _ = sft.space_attributes
+            self.max_distance = max_distance / vox_dims[0]
+        else:
+            raise ValueError('Invalid distance metric: {}'.format(dist_metric))
 
     def _key_to_voxel(self, key):
         voxel = [int(i) for i in key
@@ -348,10 +357,10 @@ class ClusterForFTD(object):
                  .split(' ')]
         return voxel
 
-    def _dist_metric_to_integer(self):
+    def _dist_metric_to_int(self):
         if self.dist_metric == 'mad_min':
             return 0
-        if self.dist_metric == 'mdf_min':
+        if self.dist_metric == 'mdf_avg':
             return 1
 
     def cluster_gpu(self, batch_size=1000):
@@ -361,16 +370,9 @@ class ClusterForFTD(object):
         cl_kernel = CLKernel('cluster_per_voxel', 'reconst', 'cluster_st.cl')
         cl_kernel.set_define('MAX_NB_STRL', f'{self.max_nb_streamlines}')
         cl_kernel.set_define('MAX_N_CLUSTERS', f'{self.max_nb_clusters}')
-        cl_kernel.set_define('MAX_DEVIATION', f'{self.max_mean_deviation}')
-
-        nb_resample = self.nb_points_resampling
-
-        if self.dist_metric == 'mad_min':
-            nb_resample -= 1
-
-        cl_kernel.set_define('N_RESAMPLE', f'{nb_resample}')
-        cl_kernel.set_define('DIST_METRIC',
-                             f'{self._dist_metric_to_integer()}')
+        cl_kernel.set_define('MAX_DEVIATION', f'{self.max_distance}')
+        cl_kernel.set_define('N_RESAMPLE', f'{self.nb_points_resampling}')
+        cl_kernel.set_define('DIST_METRIC', f'{self._dist_metric_to_int()}')
 
         N_INPUTS = 3
         N_OUTPUTS = 1

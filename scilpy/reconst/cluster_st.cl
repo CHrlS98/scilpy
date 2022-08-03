@@ -89,15 +89,16 @@ float mad_min(const float4* s_prime, const float4* t_prime,
     return direct / (float)(N_RESAMPLE);
 }
 
-float mdf_min(const float4* s, const float4* t,
-          bool* min_is_flipped)
+float mdf_avg(const float4* s, const float4* t,
+              const float s_scaling, const float t_scaling,
+              bool* min_is_flipped)
 {
     float direct = 0.0f;
     float flipped = 0.0f;
     for(int i = 0; i < N_RESAMPLE; ++i)
     {
-        direct += fast_distance(s[i].xyz, t[i].xyz);
-        flipped += fast_distance(s[i].xyz, t[N_RESAMPLE - 1 -i].xyz);
+        direct += fast_distance(s_scaling*s[i].xyz, t_scaling*t[i].xyz);
+        flipped += fast_distance(s_scaling*s[i].xyz, t_scaling*t[N_RESAMPLE - 1 -i].xyz);
     }
 
     *min_is_flipped = flipped < direct;
@@ -190,8 +191,9 @@ int qb_spatial(__global const float4* track, const int nb_points,
     {
         // compute distance to each cluster
         bool _needs_flip;
-        const float dist = mdf_min(
+        const float dist = mdf_avg(
             resampled_points, &cluster_track_sums[i*N_RESAMPLE],
+            1.0f, 1.0f/(float)cluster_track_counts[i],
             &_needs_flip);
 
         if(dist < min_dist)
@@ -236,9 +238,9 @@ int qb_spatial(__global const float4* track, const int nb_points,
     return best_cluster_id;
 }
 
-int qb_spatial_merge(const float4* track,
-                     const float max_deviation, const int nb_clusters,
-                     float4* cluster_track_sums, int* cluster_track_counts)
+int qb_spatial_merge(const float4* track, const float max_deviation,
+                     const int nb_clusters, float4* cluster_track_sums,
+                     int* cluster_track_counts)
 {
     float min_dist = FLT_MAX;
     int best_cluster_id = 0;
@@ -247,8 +249,9 @@ int qb_spatial_merge(const float4* track,
     {
         // compute distance to each cluster
         bool _needs_flip;
-        const float dist = mdf_min(
+        const float dist = mdf_avg(
             track, &cluster_track_sums[i*N_RESAMPLE],
+            1.0f, 1.0f/(float)cluster_track_counts[i],
             &_needs_flip);
 
         if(dist < min_dist)
@@ -404,6 +407,7 @@ __kernel void cluster_per_voxel(__global const float4* all_points,
     {
         for(uint point_id = 0; point_id < N_RESAMPLE; ++point_id)
         {
+            // centroids are rescaled during copy
             centroids[i*N_RESAMPLE+point_id] = cluster_track_sums[i*N_RESAMPLE+point_id]
                                              / cluster_track_counts[i];
         }

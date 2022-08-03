@@ -4,8 +4,6 @@ import logging
 import json
 import os
 from time import perf_counter
-import nibabel as nib
-import numpy as np
 from scilpy.io.streamlines import load_tractogram_with_reference
 from scilpy.io.utils import (add_json_args, add_reference_arg, add_verbose_arg,
                              assert_inputs_exist, assert_outputs_exist,
@@ -13,8 +11,13 @@ from scilpy.io.utils import (add_json_args, add_reference_arg, add_verbose_arg,
 from scilpy.reconst.ftd import ClusterForFTD
 
 
+MAD_MIN_DEFAULT_TH = 40
+MDF_AVG_DEFAULT_TH = 10
+
+
 def _build_arg_parser():
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawTextHelpFormatter)
     p.add_argument('in_tractogram',
                    help='Input short-tracks tractogram.')
     p.add_argument('in_vox2tracks',
@@ -22,15 +25,21 @@ def _build_arg_parser():
     p.add_argument('out_vox2ids',
                    help='Output voxel to ids dictionary (json).')
 
-    p.add_argument('--distance',
-                   choices=['mdf_min', 'mad_min'], default='mad_min',
-                   help='Distance to use for clustering.')
+    p.add_argument('--dist_metric',
+                   choices=['mdf_avg', 'mad_min'], default='mad_min',
+                   help='Distance to use for clustering. Choices are\n'
+                        '    \'mdf_avg\': Minimum average '
+                        'direct-flip (mm)\n    \'mad_min\': Minimum mean'
+                        ' angular deviation (degrees)\n[%(default)s]')
     p.add_argument('--nb_points_resampling', type=int, default=6,
-                   help='Number of points for streamlines resample.')
+                   help='Number of points for streamlines resample. '
+                        '[%(default)s]')
     p.add_argument('--max_nb_clusters', type=int, default=20,
-                   help='Maximum number of clusters')
-    p.add_argument('--max_deviation', type=float, default=40.0,
-                   help='Maximum angular deviation between cluster elements.')
+                   help='Maximum number of clusters. [%(default)s]')
+    p.add_argument('--max_distance', type=float,
+                   help='Maximum distance between cluster elements. The unit\n'
+                        'and default value depend on the choice of distance.\n'
+                        '    mdf_avg: [10]\n    mad_min: [40]')
     p.add_argument('--batch_size', default=5000,
                    help='Batch size for GPU.')
 
@@ -39,6 +48,15 @@ def _build_arg_parser():
     add_json_args(p)
     add_reference_arg(p)
     return p
+
+
+def _get_max_distance(args):
+    if args.max_distance:
+        return args.max_distance
+    if args.dist_metric == 'mdf_avg':
+        return MDF_AVG_DEFAULT_TH
+    if args.dist_metric == 'mad_min':
+        return MAD_MIN_DEFAULT_TH
 
 
 def main():
@@ -50,7 +68,7 @@ def main():
     assert_outputs_exist(parser, args, [args.out_vox2ids])
 
     # validate output file types
-    filename, ext = os.path.splitext(args.out_vox2ids)
+    _, ext = os.path.splitext(args.out_vox2ids)
     if ext != '.json':
         parser.error('Invalid extension for out_vox2ids: {}'
                      .format(args.out_vox2ids))
@@ -66,11 +84,12 @@ def main():
     logging.info('Loaded input data in {:.2f} seconds'
                  .format(perf_counter() - t0))
 
+    max_distance = _get_max_distance(args)
     clusters = ClusterForFTD(sft, vox2tracks,
                              nb_points_resampling=args.nb_points_resampling,
                              max_nb_clusters=args.max_nb_clusters,
-                             max_mean_deviation=args.max_deviation,
-                             dist_metric=args.distance)
+                             max_distance=max_distance,
+                             dist_metric=args.dist_metric)
 
     # launch compute
     vox2ids = clusters.cluster_gpu(batch_size=args.batch_size)
