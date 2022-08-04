@@ -33,9 +33,6 @@ def _build_arg_parser():
     p.add_argument('out_dict',
                    help='Output voxel to tracks json file.')
 
-    p.add_argument('--min_length', default=0.0, type=float,
-                   help='Minimum length in mm.')
-
     add_verbose_arg(p)
     add_json_args(p)
     add_overwrite_arg(p)
