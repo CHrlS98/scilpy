@@ -460,7 +460,6 @@ class GPUTacker():
         cl_kernel = CLKernel('main', 'tracking', 'local_tracking.cl')
 
         # Set tracking parameters
-        # TODO: Add relative sf_threshold parameter.
         cl_kernel.set_define('IM_X_DIM', self.sh.shape[0])
         cl_kernel.set_define('IM_Y_DIM', self.sh.shape[1])
         cl_kernel.set_define('IM_Z_DIM', self.sh.shape[2])
@@ -468,12 +467,12 @@ class GPUTacker():
         cl_kernel.set_define('N_DIRS', len(sphere.vertices))
 
         cl_kernel.set_define('N_THETAS', len(self.theta))
-        cl_kernel.set_define('STEP_SIZE', '{:.2f}f'.format(self.step_size))
+        cl_kernel.set_define('STEP_SIZE', '{:.8f}f'.format(self.step_size))
         cl_kernel.set_define('MAX_LENGTH', self.max_strl_points)
         cl_kernel.set_define('FORWARD_ONLY',
                              'true' if self.forward_only else 'false')
         cl_kernel.set_define('SF_THRESHOLD',
-                             '{:.2f}f'.format(self.sf_threshold))
+                             '{:.8f}f'.format(self.sf_threshold))
 
         # Create CL program
         n_input_params = 8

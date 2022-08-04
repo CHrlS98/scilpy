@@ -73,6 +73,8 @@ def _build_arg_parser():
                         ' quite conservative. [%(default)s]')
     p.add_argument('--save_seeds', action='store_true',
                    help='Save seed positions in data_per_streamline.')
+    p.add_argument('--save_status', action='store_true',
+                   help='Save endpoint status in data_per_streamline.')
     p.add_argument('--compress', type=float,
                    help='Compress streamlines using the given threshold.')
     p.add_argument('--rng_seed', type=int,
@@ -144,8 +146,8 @@ def main():
         for strl, seed, start_status, end_status in tracker.track():
             # seed must be saved in voxel space, with origin `center`.
             dps = {'seeds': seed - 0.5} if args.save_seeds else {}
-            dps['start_status'] = start_status
-            dps['end_status'] = end_status
+            dps = {'start_status': start_status} if args.save_status else {}
+            dps = {'end_status': end_status} if args.save_status else {}
 
             # TODO: Investigate why the streamline must NOT be shifted to
             # origin `corner` for LazyTractogram.

@@ -338,6 +338,7 @@ int track(float3 seed_pos,
 
         // we may need to track forward again if we didn't reach max_length
         // yet (the track might have been stopped early in forward pass)
+        /*
         if(current_length < MAX_LENGTH && endpoint_status == VALID_ENDPOINT_STATUS)
         {
             reverse_streamline(current_length, n_seeds,
@@ -353,6 +354,7 @@ int track(float3 seed_pos,
 
             last_point_status[seed_indice] = endpoint_status;
         }
+        */
     }
     return current_length;
 }
