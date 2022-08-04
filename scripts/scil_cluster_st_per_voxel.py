@@ -27,10 +27,11 @@ def _build_arg_parser():
 
     p.add_argument('--dist_metric',
                    choices=['mdf_avg', 'mad_min'], default='mad_min',
-                   help='Distance to use for clustering. Choices are\n'
+                   help='Distance to use for clustering.\nChoices are:\n'
                         '    \'mdf_avg\': Minimum average '
                         'direct-flip (mm)\n    \'mad_min\': Minimum mean'
-                        ' angular deviation (degrees)\n[%(default)s]')
+                        ' angular deviation (degrees)\n Default is '
+                        '[%(default)s]')
     p.add_argument('--nb_points_resampling', type=int, default=6,
                    help='Number of points for streamlines resample. '
                         '[%(default)s]')
