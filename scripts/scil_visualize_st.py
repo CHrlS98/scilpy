@@ -34,7 +34,6 @@ def snapshot_voxel(streamlines, vox2tracks, vox2ids, vox_id, opacity=None):
     for cluster_i in range(nb_clusters):
         c_strl = strl[np.asarray(cluster_ids) == cluster_i]
         c_opacity = float(len(c_strl)) / float(len(strl)) if opacity is None else opacity
-        print(c_opacity)
         color = np.tile(colors[cluster_i], len(c_strl)).reshape(-1, 3)
         a = actor.line(c_strl, colors=color, opacity=c_opacity)
         actors.append(a)
