@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import enum
 import logging
 from time import perf_counter
 import nibabel as nib
@@ -11,27 +12,22 @@ from scilpy.io.utils import (add_json_args, add_verbose_arg,
                              assert_outputs_exist,
                              add_overwrite_arg)
 from scilpy.io.image import get_data_as_mask
-from dipy.tracking.streamlinespeed import length
-from dipy.io.streamline import (load_tractogram,
-                                save_tractogram,
-                                StatefulTractogram)
+from dipy.io.streamline import (load_tractogram)
 from nibabel.streamlines import detect_format, TrkFile
 
 
-# endpoint statuses
-VALID_ENDPOINT_STATUS = 0
-INVALID_DIR_STATUS = 1
-INVALID_POS_STATUS = 2
-
-
 def _build_arg_parser():
-    p = argparse.ArgumentParser()
-    p.add_argument('in_tractogram',
-                   help='Input short-tracks tractogram.')
-    p.add_argument('in_mask')
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawTextHelpFormatter)
+    p.add_argument('in_tractogram', help='Input short-tracks tractogram.')
+    p.add_argument('in_mask', help='Input WM mask.')
+    p.add_argument('out_dict', help='Output voxel to tracks json file.')
 
-    p.add_argument('out_dict',
-                   help='Output voxel to tracks json file.')
+    p.add_argument('--neighbours_order', type=int, default=0,
+                   help='Size of the neighbourhood to consider. [%(default)s]')
+    p.add_argument('--all_intersections', action='store_true',
+                   help='When set, each short-track is added to all the \n'
+                        'voxels it intersects.')
 
     add_verbose_arg(p)
     add_json_args(p)
@@ -39,7 +35,7 @@ def _build_arg_parser():
     return p
 
 
-def filter_short_tracks(sft, mask):
+def assign_from_grid_intersection(sft, mask):
     """
     Creer un dictionnaire <voxel id: streamline ids>.
     Pour chaque streamline, on teste si elle est valide.
@@ -78,6 +74,45 @@ def filter_short_tracks(sft, mask):
     return vox_strl_map
 
 
+def assign_from_seeds(sft, mask, order):
+    seeds = sft.data_per_streamline['seeds']
+    vox_strl_map = {}
+    logging.info('Filtering tractogram...')
+    t0 = perf_counter()
+
+    # generate neighbours offsets list
+    nbours_offsets = []
+    nbours_range = np.arange(-order, order+1)
+    for i in nbours_range:
+        for j in nbours_range:
+            for k in nbours_range:
+                nbours_offsets.append(np.array([i, j, k]))
+    nbours_offsets = np.asarray(nbours_offsets)
+    print(nbours_offsets)
+
+    # zeropad mask to deal with outside-of-image borders
+    if order > 0:
+        # trick to keep same indices as in original array
+        # negatives will roll to (zero-padded) edge of image.
+        mask = np.pad(mask, ((0, order),))
+
+    for strl_id, seed_pos in enumerate(seeds):
+        # seed position is in vox space, origin center
+        if(strl_id % 50000 == 0):
+            logging.info('Streamline {}/{}'
+                         .format(strl_id, len(sft.streamlines) - 1))
+        vox_ids = (seed_pos + 0.5).astype(int)
+        vox_ids = nbours_offsets + vox_ids
+        for vox_id in vox_ids:
+            if mask[vox_id[0], vox_id[1], vox_id[2]] > 0:
+                vox_key = np.array2string(vox_id)
+                if vox_key not in vox_strl_map:
+                    vox_strl_map[vox_key] = []
+                vox_strl_map[vox_key].append(strl_id)
+    logging.info('Filtered tractogram in {:.2f}s'.format(perf_counter() - t0))
+    return vox_strl_map
+
+
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -87,8 +122,7 @@ def main():
     assert_inputs_exist(parser, [args.in_tractogram, args.in_mask])
     assert_outputs_exist(parser, args, [args.out_dict])
 
-    tracts_format = detect_format(args.in_tractogram)
-    if tracts_format is not TrkFile:
+    if detect_format(args.in_tractogram) is not TrkFile:
         raise ValueError("Invalid input streamline file format " +
                          "(must be trk): {0}".format(args.in_tractogram))
 
@@ -99,7 +133,10 @@ def main():
 
     logging.info('Loaded input data in {:.2f}s'.format(perf_counter() - t0))
 
-    vox2tracks_map = filter_short_tracks(sft, mask)
+    if args.all_intersections:
+        vox2tracks_map = assign_from_grid_intersection(sft, mask)
+    else:
+        vox2tracks_map = assign_from_seeds(sft, mask, args.neighbours_order)
 
     t0 = perf_counter()
     logging.info('Saving outputs...')
