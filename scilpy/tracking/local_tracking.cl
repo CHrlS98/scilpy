@@ -214,7 +214,11 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
     {
         *endpoint_status = INVALID_POS_STATUS;
     }
-    const int max_length = is_forward ? MAX_LENGTH / 2 : MAX_LENGTH;
+    // fix to force streamlines to be of MAX_LENGTH/2 per direction at most.
+    // to be closer to TODI method.
+    const int max_length = is_forward ?
+                           MAX_LENGTH / 2 :
+                           current_length + MAX_LENGTH / 2;
 
     while(current_length < max_length && is_valid)
     {
@@ -335,26 +339,6 @@ int track(float3 seed_pos,
                                    sh_to_sf_mat, &endpoint_status, out_streamlines);
 
         last_point_status[seed_indice] = endpoint_status;
-
-        // we may need to track forward again if we didn't reach max_length
-        // yet (the track might have been stopped early in forward pass)
-        /*
-        if(current_length < MAX_LENGTH && endpoint_status == VALID_ENDPOINT_STATUS)
-        {
-            reverse_streamline(current_length, n_seeds,
-                               seed_indice, out_streamlines,
-                               first_point_status, last_point_status,
-                               &last_pos, &last_dir);
-
-            // track one last time
-            current_length = propagate(last_pos, last_dir, current_length, false,
-                                       seed_indice, n_seeds, max_cos_theta_local,
-                                       tracking_mask, sh_coeffs, sf_max, rand_f, vertices,
-                                       sh_to_sf_mat, &endpoint_status, out_streamlines);
-
-            last_point_status[seed_indice] = endpoint_status;
-        }
-        */
     }
     return current_length;
 }

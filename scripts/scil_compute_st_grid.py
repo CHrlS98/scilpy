@@ -88,7 +88,6 @@ def assign_from_seeds(sft, mask, order):
             for k in nbours_range:
                 nbours_offsets.append(np.array([i, j, k]))
     nbours_offsets = np.asarray(nbours_offsets)
-    print(nbours_offsets)
 
     # zeropad mask to deal with outside-of-image borders
     if order > 0:

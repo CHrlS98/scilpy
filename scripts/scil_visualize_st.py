@@ -22,7 +22,9 @@ def _build_arg_parser():
     return p
 
 
-def snapshot_voxel(streamlines, vox2tracks, vox2ids, vox_id, opacity=None):
+def snapshot_voxel(streamlines, vox2tracks,
+                   vox2ids, vox_id, opacity=None,
+                   seeds=None):
     key = np.array2string(np.asarray(vox_id))
     strl_ids = vox2tracks[key]
     cluster_ids = vox2ids[key]
@@ -38,6 +40,10 @@ def snapshot_voxel(streamlines, vox2tracks, vox2ids, vox_id, opacity=None):
         a = actor.line(c_strl, colors=color, opacity=c_opacity)
         actors.append(a)
 
+    if seeds is not None:
+        seeds_a = actor.dots(seeds[strl_ids], color=(1, 1, 1), opacity=0.8)
+    actors.append(seeds_a)
+
     s = window.Scene()
     s.add(*actors)
     window.show(s)
@@ -52,8 +58,14 @@ def main():
 
     sft = load_tractogram_with_reference(parser, args, args.in_st)
     sft.to_vox()
+
+    seeds = None
+    if 'seeds' in sft.data_per_streamline:
+        seeds = sft.data_per_streamline['seeds']
+
     snapshot_voxel(sft.streamlines, vox2tracks, vox2ids,
-                   args.vox_id, opacity=args.opacity)
+                   args.vox_id, opacity=args.opacity,
+                   seeds=seeds)
 
 
 if __name__ == '__main__':
