@@ -6,6 +6,7 @@ import numpy as np
 import nibabel as nib
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist)
+from scilpy.reconst.ftd import key_to_vox_index
 
 
 def _build_arg_parser():
@@ -26,15 +27,6 @@ def _build_arg_parser():
 
     add_overwrite_arg(p)
     return p
-
-
-def _key_to_voxel(key):
-    voxel = [int(i) for i in key
-             .replace('[ ', '').replace('[', '')
-             .replace(' ]', '').replace(']', '')
-             .replace('  ', ' ')
-             .split(' ')]
-    return voxel
 
 
 def main():
@@ -69,7 +61,7 @@ def main():
     for vox_id in vox2clusters.keys():
         cluster_ids = np.asarray(vox2clusters[vox_id], dtype=np.uint8)
         bins = np.bincount(cluster_ids)
-        vox_id_arr = _key_to_voxel(vox_id)
+        vox_id_arr = key_to_vox_index(vox_id)
         stc_prob[tuple(vox_id_arr)][:len(bins)] = np.sort(bins)[::-1]
 
     count = np.sum(stc_prob, axis=-1)

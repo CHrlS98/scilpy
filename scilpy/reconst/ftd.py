@@ -322,6 +322,15 @@ def project_to_polynomial(P):
     return c
 
 
+def key_to_vox_index(key):
+    voxel = [int(i) for i in key
+             .replace('[ ', '').replace('[', '')
+             .replace(' ]', '').replace(']', '')
+             .replace('  ', ' ')
+             .split(' ')]
+    return voxel
+
+
 class ClusterForFTD(object):
     def __init__(self, sft, vox2tracks,
                  nb_points_resampling=6,
@@ -348,14 +357,6 @@ class ClusterForFTD(object):
             self.max_distance = max_distance / vox_dims[0]
         else:
             raise ValueError('Invalid distance metric: {}'.format(dist_metric))
-
-    def _key_to_voxel(self, key):
-        voxel = [int(i) for i in key
-                 .replace('[ ', '').replace('[', '')
-                 .replace(' ]', '').replace(']', '')
-                 .replace('  ', ' ')
-                 .split(' ')]
-        return voxel
 
     def _dist_metric_to_int(self):
         if self.dist_metric == 'mad_min':

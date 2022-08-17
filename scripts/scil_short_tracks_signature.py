@@ -6,11 +6,11 @@ import numpy as np
 from numba import njit
 import nibabel as nib
 
-from scilpy.io.streamlines import load_tractogram_with_reference
-from scilpy.io.utils import (add_json_args, add_overwrite_arg, add_reference_arg,
-                             assert_inputs_exist, assert_outputs_exist)
-from scilpy.tracking.tools import resample_streamlines_num_points
+from scilpy.io.utils import (add_json_args, add_overwrite_arg,
+                             add_reference_arg, assert_inputs_exist,
+                             assert_outputs_exist)
 from dipy.tracking.streamlinespeed import set_number_of_points
+from dipy.direction.peaks import reshape_peaks_for_visualization
 
 
 def _build_arg_parser():
@@ -26,7 +26,6 @@ def _build_arg_parser():
     p.add_argument('--angle', type=float, default=40.0,
                    help='Maximum deviation angle for estimating TOD'
                         ' peak directions. [%(default)s]')
-    add_reference_arg(p)
     add_json_args(p)
     add_overwrite_arg(p)
     return p
@@ -67,15 +66,22 @@ def approx_tod_peaks(streamlines, angle_th, max_centroids=10):
                         v = -v
                     centroids[closest_cluster] += v.reshape((-1,))
                 elif num_centroids < max_centroids:
-                    # sinon on cree un cluster, si jamais on peut pas
-                    # et qu'on est trop loin on ignore -> outlier.
+                    # sinon on cree un cluster
+                    centroids[num_centroids] = v.reshape((-1,))
+                    num_centroids += 1
+                else:  # we increase the maximum number of centroids.
+                    temp_centroids = np.zeros((max_centroids*2, 3),
+                                              dtype=np.float32)
+                    temp_centroids[:max_centroids, :] = centroids
+                    centroids = temp_centroids
+                    max_centroids *= 2
                     centroids[num_centroids] = v.reshape((-1,))
                     num_centroids += 1
             else:  # si on a pas de clusters on en crée un
                 centroids[num_centroids] = v.reshape((-1,))
                 num_centroids += 1
 
-    # TODO: Merge similar centroids.
+    # Merge similar centroids.
     out_normalized = centroids[:num_centroids]
     out_normalized /= linalg_norm(out_normalized, axis=-1).reshape((-1, 1))
 
@@ -176,19 +182,16 @@ def main():
 
     # angle threshold in radians
     angle_th = np.deg2rad(args.angle)
-
     vox2clusters = {}
     for vox, strl in vox2tracks.items():
         sub_tracks = np.array([resampled_strl[idx] for idx in strl])
 
+        # TODO: Save centroids as peaks image.
         centroids = approx_tod_peaks(sub_tracks, angle_th)
-        # print('A')
         fingerprints = fingerprint_streamlines(sub_tracks, centroids)
-        # print('B')
         max_num_fingerprints = len(np.unique(fingerprints, axis=0))
-
         fingerprints = merge_fingerprints(fingerprints, max_num_fingerprints)
-        # print('C')
+
         clusters = np.unique(np.asarray(fingerprints), axis=0)
         cluster_ids = np.zeros((len(sub_tracks), ), dtype=int)
         for i, fprint in enumerate(fingerprints):

@@ -42,7 +42,7 @@ def snapshot_voxel(streamlines, vox2tracks,
 
     if seeds is not None:
         seeds_a = actor.dots(seeds[strl_ids], color=(1, 1, 1), opacity=0.8)
-    actors.append(seeds_a)
+        actors.append(seeds_a)
 
     s = window.Scene()
     s.add(*actors)
