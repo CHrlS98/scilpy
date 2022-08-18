@@ -404,12 +404,17 @@ class GPUTacker():
         Seed for random number generator.
     """
     def __init__(self, sh, mask, seeds, step_size, min_nbr_pts, max_nbr_pts,
-                 theta=20.0, sf_threshold=0.1, sh_basis='descoteaux07',
-                 batch_size=100000, forward_only=False, rng_seed=None):
+                 theta=20.0, sf_threshold=0.1, sh_interp='trilinear',
+                 sh_basis='descoteaux07', batch_size=100000,
+                 forward_only=False, rng_seed=None):
         if not have_opencl:
             raise ImportError('pyopencl is not installed. In order to use'
                               'GPU tracker, you need to install it first.')
         self.sh = sh
+        if sh_interp not in ['nearest', 'trilinear']:
+            raise ValueError('Invalid SH interpolation mode: {}'
+                             .format(sh_interp))
+        self.sh_interp_nn = sh_interp == 'nearest'
         self.mask = mask
 
         if (seeds < 0).any():
@@ -473,6 +478,8 @@ class GPUTacker():
                              'true' if self.forward_only else 'false')
         cl_kernel.set_define('SF_THRESHOLD',
                              '{:.8f}f'.format(self.sf_threshold))
+        cl_kernel.set_define('SH_INTERP_NN',
+                             'true' if self.sh_interp_nn else 'false')
 
         # Create CL program
         n_input_params = 8

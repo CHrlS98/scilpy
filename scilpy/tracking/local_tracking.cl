@@ -15,6 +15,7 @@ SH volume. Tracking is performed in voxel space.
 #define MAX_LENGTH 0
 #define SF_THRESHOLD 0.1f
 #define FORWARD_ONLY false
+#define SH_INTERP_NN false
 
 // CONSTANTS
 #define FLOAT_TO_BOOL_EPSILON 0.1f
@@ -137,6 +138,66 @@ void sh_to_sf(const float* sh_coeffs, __global const float* sh_to_sf_mat,
     }
 }
 
+void get_value_trilinear(__global const float* image, const int n_channels,
+                          const float3 pos, float* values)
+{
+    /*
+              Z = 0                     Z = 1
+    2.0 +-------+-------+     2.0 +-------+-------+
+        |       |       |         |       |       |
+        |   C   |   D   |         |   G   |   H   |
+        |       |       |         |       |       |
+    1.0 +-------+-------+     1.0 +-------+-------+
+        |       |       |         |       |       |
+        |   A   |   B   |         |   E   |   F   |
+        |       |       |         |       |       |
+        +-------+-------+         +-------+-------+
+    0.0        1.0     2.0    0.0        1.0     2.0
+    Because origin is corner, but the ODF at voxel v is centered, i.e.
+    we are 100% A at p=(0.5, 0.5), we need to translate p by -0.5
+    */
+    const float3 t_pos = pos - 0.5f;
+    const float xd = t_pos.x - floor(t_pos.x);
+    const float yd = t_pos.y - floor(t_pos.y);
+    const float zd = t_pos.z - floor(t_pos.z);
+
+    // clip negative values and values higher than image dimensions
+    const int x0 = max(min(floor(t_pos.x), (float)(IM_X_DIM - 1)), 0.0f);
+    const int x1 = max(min(ceil(t_pos.x), (float)(IM_X_DIM - 1)), 0.0f);
+    const int y0 = max(min(floor(t_pos.y), (float)(IM_Y_DIM - 1)), 0.0f);
+    const int y1 = max(min(ceil(t_pos.y), (float)(IM_Y_DIM - 1)), 0.0f);
+    const int z0 = max(min(floor(t_pos.z), (float)(IM_Z_DIM - 1)), 0.0f);
+    const int z1 = max(min(ceil(t_pos.z), (float)(IM_Z_DIM - 1)), 0.0f);
+
+    // we need to loop over all channels
+    for(int w = 0; w < n_channels; ++w)
+    {
+        // Get values at 8 corners
+        const float A = image[get_flat_index(x0, y0, z0, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+        const float B = image[get_flat_index(x1, y0, z0, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+        const float C = image[get_flat_index(x0, y1, z0, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+        const float D = image[get_flat_index(x1, y1, z0, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+
+        const float E = image[get_flat_index(x0, y0, z1, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+        const float F = image[get_flat_index(x1, y0, z1, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+        const float G = image[get_flat_index(x0, y1, z1, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+        const float H = image[get_flat_index(x1, y1, z1, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+
+        // x-interpolation, 4 values AB, CD, EF, GH
+        const float AB = xd*B + (1.0f-xd)*A;
+        const float CD = xd*D + (1.0f-xd)*C;
+        const float EF = xd*F + (1.0f-xd)*E;
+        const float GH = xd*H + (1.0f-xd)*G;
+
+        // y-interpolation, 2 values
+        const float ABCD = yd*CD + (1.0f-yd)*AB;
+        const float EFGH = yd*GH + (1.0f-yd)*EF;
+
+        // finally z-interpolation
+        values[w] = EFGH*zd+(1.0f-zd)*ABCD;
+    }
+}
+
 void get_value_nn(__global const float* image, const int n_channels,
                   const float3 pos, float* value)
 {
@@ -146,6 +207,19 @@ void get_value_nn(__global const float* image, const int n_channels,
     for(int w = 0; w < n_channels; ++w)
     {
         value[w] = image[get_flat_index(x, y, z, w, IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
+    }
+}
+
+void get_value(__global const float* image, const int n_channels,
+               const float3 pos, bool nn_interp, float* value)
+{
+    if(nn_interp)
+    {
+        get_value_nn(image, n_channels, pos, value);
+    }
+    else
+    {
+        get_value_trilinear(image, n_channels, pos, value);
     }
 }
 
@@ -223,15 +297,19 @@ int propagate(float3 last_pos, float3 last_dir, int current_length,
     while(current_length < max_length && is_valid)
     {
         // Sample SF at position.
+        // Get SH at position.
         float odf_sh[IM_N_COEFFS];
+        get_value(sh_coeffs, IM_N_COEFFS, last_pos, SH_INTERP_NN, odf_sh);
+
+        // Convert SH to SF.
+        const float curr_sf_max = sf_max[get_flat_index(last_pos.x, last_pos.y,
+                                                        last_pos.z, 0, IM_X_DIM,
+                                                        IM_Y_DIM, IM_Z_DIM)];
         float odf_sf[N_DIRS];
-        const float curr_sf_max =
-            sf_max[get_flat_index(last_pos.x, last_pos.y, last_pos.z, 0,
-                                  IM_X_DIM, IM_Y_DIM, IM_Z_DIM)];
-        get_value_nn(sh_coeffs, IM_N_COEFFS, last_pos, odf_sh);
         sh_to_sf(odf_sh, sh_to_sf_mat, curr_sf_max, current_length == 1,
                  vertices, last_dir, max_cos_theta_local, odf_sf);
 
+        // Sample distribution.
         const float randv = rand_f[get_flat_index(seed_indice, current_length, 0, 0,
                                                   n_seeds, MAX_LENGTH, 1)];
         const int vert_indice = sample_sf(odf_sf, randv);

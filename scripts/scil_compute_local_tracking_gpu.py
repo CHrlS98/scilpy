@@ -64,8 +64,11 @@ def _build_arg_parser():
     p.add_argument('--max_length', type=float, default=300.0,
                    help='Maximum length of the streamline '
                         'in mm. [%(default)s]')
-    p.add_argument('--sf_thresh', type=float, default=0.1,
+    p.add_argument('--sf_threshold', type=float, default=0.1,
                    help='Relative threshold on sf amplitudes. [%(default)s]')
+    p.add_argument('--sh_interp', default='nearest',
+                   choices=['nearest', 'trilinear'],
+                   help='SH interpolation mode. [%(default)s]')
     p.add_argument('--forward_only', action='store_true',
                    help='Only perform forward tracking.')
     p.add_argument('--batch_size', type=int, default=100000,
@@ -135,7 +138,10 @@ def main():
 
     # initialize tracking
     tracker = GPUTacker(odf_sh, mask, seeds, vox_step_size, min_strl_len,
-                        max_strl_len, theta=args.theta, sh_basis=args.sh_basis,
+                        max_strl_len, theta=args.theta,
+                        sf_threshold=args.sf_threshold,
+                        sh_interp=args.sh_interp,
+                        sh_basis=args.sh_basis,
                         batch_size=args.batch_size,
                         forward_only=args.forward_only,
                         rng_seed=args.rng_seed)
@@ -153,7 +159,7 @@ def main():
                 dps['end_status'] = end_status
 
             # TODO: Investigate why the streamline must NOT be shifted to
-            # origin `corner` for LazyTractogram.
+            # origin `center` for LazyTractogram.
             strl *= voxel_size  # in mm.
             if args.compress:
                 strl = compress_streamlines(strl, args.compress)
