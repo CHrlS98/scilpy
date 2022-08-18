@@ -74,8 +74,7 @@ def assign_from_grid_intersection(sft, mask):
     return vox_strl_map
 
 
-def assign_from_seeds(sft, mask, order):
-    seeds = sft.data_per_streamline['seeds']
+def assign_from_seeds(lazy_seeds, nb_streamlines, mask, order):
     vox_strl_map = {}
     logging.info('Filtering tractogram...')
     t0 = perf_counter()
@@ -95,11 +94,11 @@ def assign_from_seeds(sft, mask, order):
         # negatives will roll to (zero-padded) edge of image.
         mask = np.pad(mask, ((0, order),))
 
-    for strl_id, seed_pos in enumerate(seeds):
+    for strl_id, seed_pos in enumerate(lazy_seeds):
         # seed position is in vox space, origin center
         if(strl_id % 50000 == 0):
             logging.info('Streamline {}/{}'
-                         .format(strl_id, len(sft.streamlines) - 1))
+                         .format(strl_id, nb_streamlines))
         vox_ids = (seed_pos + 0.5).astype(int)
         vox_ids = nbours_offsets + vox_ids
         for vox_id in vox_ids:
@@ -126,16 +125,20 @@ def main():
                          "(must be trk): {0}".format(args.in_tractogram))
 
     t0 = perf_counter()
-    logging.info('Loading images...')
-    sft = load_tractogram(args.in_tractogram, 'same')
     mask = get_data_as_mask(nib.load(args.in_mask))
 
-    logging.info('Loaded input data in {:.2f}s'.format(perf_counter() - t0))
-
     if args.all_intersections:
+        logging.info('Loading tractogram...')
+        sft = load_tractogram(args.in_tractogram, 'same')
+        logging.info('Loaded input data in {:.2f}s'
+                     .format(perf_counter() - t0))
         vox2tracks_map = assign_from_grid_intersection(sft, mask)
     else:
-        vox2tracks_map = assign_from_seeds(sft, mask, args.neighbours_order)
+        lazy_trk = nib.streamlines.load(args.in_tractogram, True)
+        nb_streamlines = lazy_trk.header['nb_streamlines']
+        lazy_seeds = lazy_trk.tractogram.data_per_streamline['seeds']
+        vox2tracks_map = assign_from_seeds(lazy_seeds, nb_streamlines,
+                                           mask, args.neighbours_order)
 
     t0 = perf_counter()
     logging.info('Saving outputs...')
