@@ -75,10 +75,8 @@ def main():
     strl_ids_offset = 0
     for vox, strl_ids in vox2tracks.items():
         ind = np.arange(len(strl_ids))
-        print(len(ind))
         rng.shuffle(ind)
         ind = ind[:int(ratio_keep*len(ind))]
-        print(len(ind))
         ids_keep = np.asarray(strl_ids)[ind]
         vox2tracks_keep[vox] = []
         for i in ids_keep:
