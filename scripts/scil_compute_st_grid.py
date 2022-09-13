@@ -25,53 +25,11 @@ def _build_arg_parser():
 
     p.add_argument('--neighbours_order', type=int, default=0,
                    help='Size of the neighbourhood to consider. [%(default)s]')
-    p.add_argument('--all_intersections', action='store_true',
-                   help='When set, each short-track is added to all the \n'
-                        'voxels it intersects.')
 
     add_verbose_arg(p)
     add_json_args(p)
     add_overwrite_arg(p)
     return p
-
-
-def assign_from_grid_intersection(sft, mask):
-    """
-    Creer un dictionnaire <voxel id: streamline ids>.
-    Pour chaque streamline, on teste si elle est valide.
-    Si oui, on prend son voxel id et on l'ajoute dans le
-    dictionnaire.
-    """
-    sft.to_vox()
-    sft.to_corner()
-
-    all_crossed_indices = grid_intersections(sft.streamlines)
-    vox_strl_map = {}
-
-    t0 = perf_counter()
-    logging.info('Filtering tractogram...')
-    for strl_id, crossed_indices in enumerate(all_crossed_indices):
-        if(strl_id % 50000 == 0):
-            logging.info('Streamline {}/{}'
-                         .format(strl_id, len(sft.streamlines) - 1))
-
-        # Acceptons tout.
-        # Nos clusters vont nous dire si les streamlines sont des outliers.
-        voxel_indices = np.unique(crossed_indices.astype(int), axis=0)
-        for voxel_id in voxel_indices:
-            # mask sure position is inside mask
-            if mask[voxel_id[0], voxel_id[1], voxel_id[2]] > 0:
-                voxel2str = np.array2string(voxel_id)
-
-                # if the voxel is not in the map yet, create empty list
-                if voxel2str not in vox_strl_map:
-                    vox_strl_map[voxel2str] = []
-
-                # add strl id to dictionary
-                vox_strl_map[voxel2str].append(strl_id)
-
-    logging.info('Filtered tractogram in {:.2f}s'.format(perf_counter() - t0))
-    return vox_strl_map
 
 
 def assign_from_seeds(lazy_seeds, nb_streamlines, mask, order):
@@ -127,18 +85,11 @@ def main():
     t0 = perf_counter()
     mask = get_data_as_mask(nib.load(args.in_mask))
 
-    if args.all_intersections:
-        logging.info('Loading tractogram...')
-        sft = load_tractogram(args.in_tractogram, 'same')
-        logging.info('Loaded input data in {:.2f}s'
-                     .format(perf_counter() - t0))
-        vox2tracks_map = assign_from_grid_intersection(sft, mask)
-    else:
-        lazy_trk = nib.streamlines.load(args.in_tractogram, True)
-        nb_streamlines = lazy_trk.header['nb_streamlines']
-        lazy_seeds = lazy_trk.tractogram.data_per_streamline['seeds']
-        vox2tracks_map = assign_from_seeds(lazy_seeds, nb_streamlines,
-                                           mask, args.neighbours_order)
+    lazy_trk = nib.streamlines.load(args.in_tractogram, True)
+    nb_streamlines = lazy_trk.header['nb_streamlines']
+    lazy_seeds = lazy_trk.tractogram.data_per_streamline['seeds']
+    vox2tracks_map = assign_from_seeds(lazy_seeds, nb_streamlines,
+                                       mask, args.neighbours_order)
 
     t0 = perf_counter()
     logging.info('Saving outputs...')
