@@ -24,13 +24,17 @@ class CLManager(object):
     n_outputs: int
         Number of output buffers for the kernel.
     """
-    def __init__(self, cl_kernel, n_inputs, n_outputs):
+    def __init__(self, cl_kernel):
         if not have_opencl:
             raise RuntimeError('pyopencl is not installed. '
                                'Cannot create CLManager instance.')
 
-        self.input_buffers = [0] * n_inputs
-        self.output_buffers = [0] * n_outputs
+        self.input_buffers = []  # [0] * n_inputs
+        self.output_buffers = []  # * n_outputs
+
+        # maps key to index in buffers list
+        self.inputs_mapping = {}
+        self.outputs_mapping = {}
 
         # Find the best device for running GPU tasks
         platforms = cl.get_platforms()
@@ -67,7 +71,7 @@ class CLManager(object):
             self.shape = shape
             self.dtype = dtype
 
-    def add_input_buffer(self, arg_pos, arr, dtype=np.float32):
+    def add_input_buffer(self, key, arr=None, dtype=np.float32):
         """
         Add an input buffer to the kernel program. Input buffers
         must be added in the same order as they are declared inside
@@ -96,14 +100,31 @@ class CLManager(object):
         For example, for a 3-dimensional array of shape (X, Y, Z), the flat
         index for position i, j, k is idx = i + j * X + z * X * Y.
         """
-        # convert to fortran ordered, dtype array
+        buf = None
+        if arr is not None:
+            # convert to fortran ordered, dtype array
+            arr = np.asfortranarray(arr, dtype=dtype)
+            buf = cl.Buffer(self.context, cl.mem_flags.READ_ONLY |
+                            cl.mem_flags.COPY_HOST_PTR, hostbuf=arr)
+
+        if key in self.inputs_mapping.keys():
+            raise ValueError('Invalid key for buffer!')
+
+        self.inputs_mapping[key] = len(self.input_buffers)
+        self.input_buffers.append(buf)
+
+    def update_input_buffer(self, key, arr, dtype=np.float32):
+        if key not in self.inputs_mapping.keys():
+            raise ValueError('Invalid key for buffer!')
+        argpos = self.inputs_mapping[key]
+
         arr = np.asfortranarray(arr, dtype=dtype)
         buf = cl.Buffer(self.context,
                         cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
                         hostbuf=arr)
-        self.input_buffers[arg_pos] = buf
+        self.input_buffers[argpos] = buf
 
-    def add_output_buffer(self, arg_pos, shape, dtype=np.float32):
+    def add_output_buffer(self, key, shape, dtype=np.float32):
         """
         Add an output buffer.
 
@@ -119,7 +140,22 @@ class CLManager(object):
         """
         buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY,
                         np.prod(shape) * np.dtype(dtype).itemsize)
-        self.output_buffers[arg_pos] = self.OutBuffer(buf, shape, dtype)
+
+        if key in self.outputs_mapping.keys():
+            raise ValueError('Invalid key for buffer!')
+
+        self.outputs_mapping[key] = len(self.output_buffers)
+        self.output_buffers.append(self.OutBuffer(buf, shape, dtype))
+
+    def update_output_buffer(self, key, shape, dtype=np.float32):
+        if key not in self.outputs_mapping.keys():
+            raise ValueError('Invalid key for buffer!')
+        argpos = self.outputs_mapping[key]
+
+        buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY,
+                        np.prod(shape) * np.dtype(dtype).itemsize)
+        out_buf = self.OutBuffer(buf, shape, dtype)
+        self.output_buffers[argpos] = out_buf
 
     def run(self, global_size, local_size=None):
         """

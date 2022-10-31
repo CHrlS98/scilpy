@@ -98,7 +98,6 @@ def main():
                                    sigma_angle=args.sigma_angle,
                                    sigma_range=args.sigma_range)
     asym_sh = asym_filter(data)
-    return
     t1 = time.perf_counter()
     logging.info('Elapsed time (s): {0}'.format(t1 - t0))
 
