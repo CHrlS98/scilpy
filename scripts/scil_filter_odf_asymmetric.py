@@ -25,7 +25,7 @@ from scilpy.reconst.utils import get_sh_order_and_fullness
 from scilpy.io.utils import (add_overwrite_arg, add_verbose_arg,
                              assert_inputs_exist, add_sh_basis_args,
                              assert_outputs_exist)
-from scilpy.denoise.generalized import AsymmetricFilter
+from scilpy.denoise.generalized_filter import AsymmetricFilter
 
 
 def _build_arg_parser():
@@ -43,12 +43,12 @@ def _build_arg_parser():
     p.add_argument('--out_sym', default=None,
                    help='Name of optional symmetric output. [%(default)s]')
 
-    p.add_argument('--sphere', default='repulsion724',
+    p.add_argument('--sphere', default='repulsion200',
                    choices=sorted(SPHERE_FILES.keys()),
                    help='Sphere used for the SH to SF projection. '
                         '[%(default)s]')
 
-    p.add_argument('--sigma_spatial', default=1.0, type=float,
+    p.add_argument('--sigma_spatial', default=0.25, type=float,
                    help='Standard deviation for spatial regularizer.'
                         ' [%(default)s]')
 
@@ -63,6 +63,21 @@ def _build_arg_parser():
     p.add_argument('--sigma_range', default=1.0, type=float,
                    help='Standard deviation for range regularizer.'
                         ' [%(default)s]')
+
+    p.add_argument('--exclude_self', action='store_true',
+                   help='Exclude current voxel from neighbours.')
+
+    p.add_argument('--disable_spatial', action='store_true',
+                   help='Disable spatial filter.')
+
+    p.add_argument('--disable_align', action='store_true',
+                   help='Disable align filter.')
+
+    p.add_argument('--disable_angle', action='store_true',
+                   help='Disable angle filter.')
+
+    p.add_argument('--disable_range', action='store_true',
+                   help='Disable range filter.')
 
     add_verbose_arg(p)
     add_overwrite_arg(p)
@@ -96,7 +111,12 @@ def main():
                                    sigma_spatial=args.sigma_spatial,
                                    sigma_align=args.sigma_align,
                                    sigma_angle=args.sigma_angle,
-                                   sigma_range=args.sigma_range)
+                                   sigma_range=args.sigma_range,
+                                   exclude_self=args.exclude_self,
+                                   disable_spatial=args.disable_spatial,
+                                   disable_align=args.disable_align,
+                                   disable_angle=args.disable_angle,
+                                   disable_range=args.disable_range)
     asym_sh = asym_filter(data)
     t1 = time.perf_counter()
     logging.info('Elapsed time (s): {0}'.format(t1 - t0))

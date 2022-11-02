@@ -124,7 +124,7 @@ class CLManager(object):
                         hostbuf=arr)
         self.input_buffers[argpos] = buf
 
-    def add_output_buffer(self, key, shape, dtype=np.float32):
+    def add_output_buffer(self, key, shape=None, dtype=np.float32):
         """
         Add an output buffer.
 
@@ -138,11 +138,13 @@ class CLManager(object):
             Data type for the output. It is recommended to keep
             float32 to avoid unexpected behaviour.
         """
-        buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY,
-                        np.prod(shape) * np.dtype(dtype).itemsize)
-
         if key in self.outputs_mapping.keys():
             raise ValueError('Invalid key for buffer!')
+
+        buf = None
+        if shape is not None:
+            buf = cl.Buffer(self.context, cl.mem_flags.WRITE_ONLY,
+                            np.prod(shape) * np.dtype(dtype).itemsize)
 
         self.outputs_mapping[key] = len(self.output_buffers)
         self.output_buffers.append(self.OutBuffer(buf, shape, dtype))
