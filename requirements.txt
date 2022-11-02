@@ -3,9 +3,11 @@ coloredlogs==10.0.*
 cycler==0.10.*
 Cython==0.29.*
 dipy==1.5.*
+docopt==0.6.2
 fury==0.7.*
 future==0.17.*
 h5py==2.10.*
+joblib==1.1.0
 kiwisolver==1.0.*
 matplotlib==2.2.*
 nibabel==3.0.*

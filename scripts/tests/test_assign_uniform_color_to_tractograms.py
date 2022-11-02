@@ -13,7 +13,8 @@ tmp_dir = tempfile.TemporaryDirectory()
 
 
 def test_help_option(script_runner):
-    ret = script_runner.run('scil_compute_bundle_voxel_label_map.py', '--help')
+    ret = script_runner.run('scil_assign_uniform_color_to_tractograms.py',
+                            '--help')
     assert ret.success
 
 
@@ -21,10 +22,7 @@ def test_execution_tractometry(script_runner):
     os.chdir(os.path.expanduser(tmp_dir.name))
     in_bundle = os.path.join(get_home(), 'tractometry',
                              'IFGWM.trk')
-    in_centroid = os.path.join(get_home(), 'tractometry',
-                               'IFGWM_uni_c_10.trk')
-    ret = script_runner.run('scil_compute_bundle_voxel_label_map.py',
-                            in_bundle, in_centroid,
-                            'results_dir/',
-                            '--colormap', 'viridis')
+    ret = script_runner.run('scil_assign_uniform_color_to_tractograms.py',
+                            in_bundle, '--fill_color', '0x000000',
+                            '--out_tractogram', 'colored.trk')
     assert ret.success
