@@ -411,7 +411,7 @@ def create_tube_with_radii(positions, radii, error, error_coloring=False,
     return actor
 
 
-def create_scene(actors, orientation, slice_index, volume_shape):
+def create_scene(actors, orientation, slice_index, volume_shape, zoom=1.0):
     """
     Create a 3D scene containing actors fitting inside a grid. The camera is
     placed based on the orientation supplied by the user. The projection mode
@@ -441,7 +441,7 @@ def create_scene(actors, orientation, slice_index, volume_shape):
     scene.set_camera(position=camera[CamParams.VIEW_POS],
                      focal_point=camera[CamParams.VIEW_CENTER],
                      view_up=camera[CamParams.VIEW_UP])
-    scene.zoom(camera[CamParams.ZOOM_FACTOR])
+    scene.zoom(camera[CamParams.ZOOM_FACTOR]*zoom)
 
     # Add actors to the scene
     for curr_actor in actors:

@@ -50,6 +50,9 @@ def _build_arg_parser():
                    help='Specify interactor mode for vtk window. '
                         '[%(default)s]')
 
+    p.add_argument('--zoom', type=float, default=1.0,
+                   help='Zoom factor [%(default)s].')
+
     p.add_argument('--axis_name', default='axial', type=str,
                    choices={'axial', 'coronal', 'sagittal'},
                    help='Name of the axis to visualize. [%(default)s]')
@@ -225,6 +228,14 @@ def main():
     # Retrieve the mask if supplied
     if 'mask' in data:
         mask = data['mask']
+        lower_bnd = np.min(np.asarray(np.nonzero(mask)), axis=-1)
+        upper_bnd = np.max(np.asarray(np.nonzero(mask)), axis=-1)
+        print(lower_bnd, upper_bnd)
+        mask = mask[lower_bnd[0]:upper_bnd[0], lower_bnd[1]:upper_bnd[1],
+                    lower_bnd[2]:upper_bnd[2]]
+        data['fodf'] = data['fodf'][lower_bnd[0]:upper_bnd[0],
+                                    lower_bnd[1]:upper_bnd[1],
+                                    lower_bnd[2]:upper_bnd[2]]
     else:
         mask = None
 
@@ -272,7 +283,8 @@ def main():
     # Prepare and display the scene
     scene = create_scene(actors, args.axis_name,
                          args.slice_index,
-                         data['fodf'].shape[:3])
+                         data['fodf'].shape[:3],
+                         zoom=args.zoom)
     render_scene(scene, args.win_dims, args.interactor,
                  args.output, args.silent)
 
