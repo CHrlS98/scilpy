@@ -19,8 +19,9 @@ import time
 import nibabel as nib
 import numpy as np
 
-from dipy.data import SPHERE_FILES
-from dipy.reconst.shm import sph_harm_ind_list
+from dipy.data import SPHERE_FILES, get_sphere
+from dipy.core.sphere import HemiSphere
+from dipy.reconst.shm import sph_harm_ind_list, sh_to_sf
 from scilpy.reconst.utils import get_sh_order_and_fullness
 from scilpy.io.utils import (add_overwrite_arg, add_verbose_arg,
                              assert_inputs_exist, add_sh_basis_args,
@@ -48,21 +49,22 @@ def _build_arg_parser():
                    help='Sphere used for the SH to SF projection. '
                         '[%(default)s]')
 
-    p.add_argument('--sigma_spatial', default=0.25, type=float,
+    p.add_argument('--sigma_spatial', default=1.0, type=float,
                    help='Standard deviation for spatial regularizer.'
                         ' [%(default)s]')
 
-    p.add_argument('--sigma_align', default=1.0, type=float,
+    p.add_argument('--sigma_align', default=0.8, type=float,
                    help='Standard deviation for alignment regularizer.'
                         ' [%(default)s]')
 
-    p.add_argument('--sigma_angle', default=1.0, type=float,
+    p.add_argument('--sigma_angle', default=0.1, type=float,
                    help='Standard deviation for angular regularizer.'
                         ' [%(default)s]')
 
-    p.add_argument('--sigma_range', default=1.0, type=float,
-                   help='Standard deviation for range regularizer.'
-                        ' [%(default)s]')
+    p.add_argument('--sigma_range', default=0.2, type=float,
+                   help='Standard deviation for range regularizer\n'
+                        '**given as a ratio of the range of SF amplitudes \n'
+                        'in the image**. [%(default)s]')
 
     p.add_argument('--exclude_self', action='store_true',
                    help='Exclude current voxel from neighbours.')
@@ -85,6 +87,14 @@ def _build_arg_parser():
     return p
 
 
+def get_sf_range(data, sh_order, full_basis, sphere_name):
+    hemi = HemiSphere.from_sphere(get_sphere(sphere_name))
+    sf = np.array([sh_to_sf(sh, hemi, sh_order, full_basis=full_basis)
+                   for sh in data], dtype=np.float32)
+    vrange = np.max(sf) - np.min(sf)
+    return vrange
+
+
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -101,8 +111,12 @@ def main():
     # Prepare data
     sh_img = nib.load(args.in_sh)
     data = sh_img.get_fdata(dtype=np.float32)
-
     sh_order, full_basis = get_sh_order_and_fullness(data.shape[-1])
+
+    sigma_range = args.sigma_range
+    if not args.disable_range:
+        vrange = get_sf_range(data, sh_order, full_basis, args.sphere)
+        sigma_range = args.sigma_range * vrange
 
     t0 = time.perf_counter()
     logging.info('Executing angle-aware bilateral filtering.')
@@ -111,7 +125,7 @@ def main():
                                    sigma_spatial=args.sigma_spatial,
                                    sigma_align=args.sigma_align,
                                    sigma_angle=args.sigma_angle,
-                                   sigma_range=args.sigma_range,
+                                   sigma_range=sigma_range,
                                    exclude_self=args.exclude_self,
                                    disable_spatial=args.disable_spatial,
                                    disable_align=args.disable_align,
