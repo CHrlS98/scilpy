@@ -168,11 +168,11 @@ def main():
     sphere = get_sphere(args.sphere)
 
     sh_order, full_basis = get_sh_order_and_fullness(sh.shape[-1])
-    if not full_basis:
+    if not full_basis and (args.cos_asym_map or args.odd_power_map):
         parser.error('Invalid SH image. A full SH basis is expected.')
 
     if args.mask:
-        mask = get_data_as_mask(nib.load(args.mask), dtype=bool)
+        mask = nib.load(args.mask).get_fdata().astype(bool)
     else:
         mask = np.sum(np.abs(sh), axis=-1) > 0
 
@@ -198,7 +198,7 @@ def main():
                           npeaks=10,
                           sh_basis_type=args.sh_basis,
                           nbr_processes=args.nbr_processes,
-                          full_basis=True,
+                          full_basis=full_basis,
                           is_symmetric=False)
 
         if args.peaks:
