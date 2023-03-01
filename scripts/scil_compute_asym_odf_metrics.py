@@ -116,6 +116,8 @@ def compute_cos_asym_map(sh_coeffs, order, mask):
     cos_asym_map[mask] = np.sum(sh_squared * sign, axis=-1)[mask] / \
         np.sum(sh_squared, axis=-1)[mask]
 
+    # Negatives should not happen (amplitudes always positive)
+    cos_asym_map = np.clip(cos_asym_map, 0.0, 1.0)
     cos_asym_map = np.sqrt(1 - cos_asym_map**2) * mask
 
     return cos_asym_map
