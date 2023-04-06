@@ -13,12 +13,14 @@ within the bounding box
 import argparse
 import logging
 
+from dipy.io.stateful_tractogram import StatefulTractogram
 from dipy.io.streamline import save_tractogram
 import numpy as np
 
 from scilpy.io.streamlines import load_tractogram_with_reference
-from scilpy.io.utils import (add_overwrite_arg, add_reference_arg,
-                             assert_inputs_exist, assert_outputs_exist)
+from scilpy.io.utils import (add_bbox_arg, add_overwrite_arg,
+                             add_reference_arg, assert_inputs_exist,
+                             assert_outputs_exist)
 from scilpy.utils.streamlines import cut_invalid_streamlines
 
 
@@ -43,6 +45,8 @@ def _build_arg_parser():
     p.add_argument('--threshold', type=float, default=0.001,
                    help='Maximum distance between two points to be considered'
                         ' overlapping [%(default)s mm].')
+    p.add_argument('--no_empty', action='store_true',
+                   help='Do not save empty tractogram.')
 
     add_reference_arg(p)
     add_overwrite_arg(p)
@@ -54,14 +58,17 @@ def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
 
+    # Equivalent of add_bbox_arg(p): always ignoring invalid streamlines for
+    # this script.
+    args.bbox_check = False
+
     assert_inputs_exist(parser, args.in_tractogram, args.reference)
     assert_outputs_exist(parser, args, args.out_tractogram)
 
     if args.threshold < 0:
         parser.error("Threshold must be positive.")
 
-    sft = load_tractogram_with_reference(parser, args, args.in_tractogram,
-                                         bbox_check=False)
+    sft = load_tractogram_with_reference(parser, args, args.in_tractogram)
     ori_len = len(sft)
     if args.cut_invalid:
         sft, cutting_counter = cut_invalid_streamlines(sft)
@@ -85,10 +92,15 @@ def main():
     if len(indices):
         new_sft = sft[indices]
     else:
-        new_sft = sft
+        new_sft = StatefulTractogram.from_sft([], sft)
+
     logging.warning('Removed {} invalid streamlines.'.format(
         ori_len - len(new_sft)))
-    save_tractogram(new_sft, args.out_tractogram)
+
+    if len(new_sft) > 0 or (not args.no_empty and len(new_sft) == 0):
+        save_tractogram(new_sft, args.out_tractogram)
+    else:
+        logging.warning('No valid streamline, not saving due to --no_empty.')
 
 
 if __name__ == "__main__":

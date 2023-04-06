@@ -177,7 +177,8 @@ def add_sphere_arg(parser, symmetric_only=False, default='symmetric724'):
 
     parser.add_argument('--sphere', choices=spheres,
                         default=default,
-                        help='Dipy sphere; set of possible directions.')
+                        help='Dipy sphere; set of possible directions.\n'
+                             'Default: [%(default)s]')
 
 
 def add_overwrite_arg(parser):
@@ -196,6 +197,15 @@ def add_force_b0_arg(parser):
 def add_verbose_arg(parser):
     parser.add_argument('-v', action='store_true', dest='verbose',
                         help='If set, produces verbose output.')
+
+
+def add_bbox_arg(parser):
+    parser.add_argument('--no_bbox_check', dest='bbox_check',
+                        action='store_false',
+                        help='Activate to ignore validity of the bounding '
+                             'box during loading / saving of \n'
+                             'tractograms (ignores the presence of invalid '
+                             'streamlines).')
 
 
 def add_sh_basis_args(parser, mandatory=False):
@@ -440,7 +450,8 @@ def verify_compatibility_with_reference_sft(ref_sft, files_to_verify,
     parser: argument parser
         Will raise an error if a file is not compatible.
     args: Namespace
-        Should contain a args.reference if any file is a .tck.
+        Should contain a args.reference if any file is a .tck, and possibly a
+        args.bbox_check (set to True by default).
     """
     save_ref = args.reference
 
@@ -455,8 +466,7 @@ def verify_compatibility_with_reference_sft(ref_sft, files_to_verify,
                     args.reference = None
                 else:
                     args.reference = save_ref
-                mask = load_tractogram_with_reference(parser, args, file,
-                                                      bbox_check=False)
+                mask = load_tractogram_with_reference(parser, args, file)
             else:  # should be a nifti file.
                 mask = file
             compatible = is_header_compatible(ref_sft, mask)
@@ -510,7 +520,7 @@ def read_info_from_mb_bdo(filename):
     center = [flip[0]*float(center_tag.attrib['x'].replace(',', '.')),
               flip[1]*float(center_tag.attrib['y'].replace(',', '.')),
               flip[2]*float(center_tag.attrib['z'].replace(',', '.'))]
-    row_list = tree.getiterator('Row')
+    row_list = tree.iter('Row')
     radius = [None, None, None]
     for i, row in enumerate(row_list):
         for j in range(0, 3):
@@ -540,9 +550,12 @@ def load_matrix_in_any_format(filepath):
         # antsRegistration that encode a 4x4 transformation matrix.
         transfo_dict = loadmat(filepath)
         lps2ras = np.diag([-1, -1, 1])
+        transfo_key = 'AffineTransform_double_3_3'
+        if transfo_key not in transfo_dict:
+            transfo_key = 'AffineTransform_float_3_3'
 
-        rot = transfo_dict['AffineTransform_double_3_3'][0:9].reshape((3, 3))
-        trans = transfo_dict['AffineTransform_double_3_3'][9:12]
+        rot = transfo_dict[transfo_key][0:9].reshape((3, 3))
+        trans = transfo_dict[transfo_key][9:12]
         offset = transfo_dict['fixed']
         r_trans = (np.dot(rot, offset) - offset - trans).T * [1, 1, -1]
 

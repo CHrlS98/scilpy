@@ -22,7 +22,7 @@ import nibabel as nib
 from nibabel.streamlines.array_sequence import ArraySequence
 import numpy as np
 import scipy.ndimage as ndi
-from scipy.spatial.ckdtree import cKDTree
+from scipy.spatial import cKDTree
 
 from scilpy.io.streamlines import load_tractogram_with_reference
 from scilpy.io.utils import (add_overwrite_arg,
@@ -33,9 +33,9 @@ from scilpy.tracking.tools import resample_streamlines_num_points
 from scilpy.tractanalysis.streamlines_metrics import compute_tract_counts_map
 from scilpy.tractanalysis.tools import cut_outside_of_mask_streamlines
 from scilpy.tractanalysis.distance_to_centroid import min_dist_to_centroid
-from scipy.ndimage import map_coordinates
-from scipy.ndimage.filters import gaussian_filter
+from scipy.ndimage import gaussian_filter, map_coordinates
 from scilpy.utils.streamlines import uniformize_bundle_sft
+from scilpy.viz.utils import get_colormap
 
 
 def _build_arg_parser():
@@ -216,7 +216,7 @@ def main():
     final_streamlines = []
     final_label = []
     final_dist = []
-    for c, cluster in enumerate(clusters_map):
+    for _, cluster in enumerate(clusters_map):
         tmp_sft = StatefulTractogram.from_sft([cluster.centroid], concat_sft)
         uniformize_bundle_sft(tmp_sft, ref_bundle=sft_centroid)
         cluster_centroid = tmp_sft.streamlines[0] if args.new_labeling \
@@ -298,10 +298,7 @@ def main():
                 np.average(labels_val, weights=dist_vox))
             distance_map[tuple(ind)] = np.average(dist_vox)
 
-    nib.save(nib.Nifti1Image(labels_map.astype(np.uint16), sft_list[0].affine),
-             os.path.join(args.out_dir, 'labels_map.nii.gz'))
-    nib.save(nib.Nifti1Image(distance_map, sft_list[0].affine),
-             os.path.join(args.out_dir, 'distance_map.nii.gz'))
+        cmap = get_colormap(args.colormap)
 
     for i, sft in enumerate(sft_list):
         if len(sft_list) > 1:
@@ -333,7 +330,7 @@ def main():
             tmp_corr = ndi.map_coordinates(corr_map,
                                            sft.streamlines._data.T-0.5,
                                            order=0)
-            cmap = plt.get_cmap(args.colormap)
+            cmap = plt.colormaps[args.colormap]
             new_sft.data_per_point['color'] = ArraySequence(
                 new_sft.streamlines)
 

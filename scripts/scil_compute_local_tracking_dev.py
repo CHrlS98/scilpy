@@ -47,6 +47,7 @@ import time
 
 import dipy.core.geometry as gm
 import nibabel as nib
+import numpy as np
 
 from dipy.io.stateful_tractogram import StatefulTractogram, Space, \
                                         set_sft_logger_level
@@ -80,7 +81,7 @@ def _build_arg_parser():
     track_g = add_tracking_options(p)
     track_g.add_argument('--algo', default='prob',
                          choices=['det', 'prob'],
-                         help='Algorithm to use [%(default)s]')
+                         help='Algorithm to use. [%(default)s]')
     add_sphere_arg(track_g, symmetric_only=False)
     track_g.add_argument('--sfthres_init', metavar='sf_th', type=float,
                          default=0.5, dest='sf_threshold_init',
@@ -169,6 +170,11 @@ def main():
     logging.debug("Loading seeding mask.")
     seed_img = nib.load(args.in_seed)
     seed_data = seed_img.get_fdata(caching='unchanged', dtype=float)
+    if np.count_nonzero(seed_data) == 0:
+        raise IOError('The image {} is empty. '
+                      'It can\'t be loaded as '
+                      'seeding mask.'.format(args.in_seed))
+
     seed_res = seed_img.header.get_zooms()[:3]
     seed_generator = SeedGenerator(seed_data, seed_res,
                                    space=our_space, origin=our_origin)
