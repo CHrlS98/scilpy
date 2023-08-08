@@ -63,7 +63,7 @@ def _build_arg_parser():
     p.add_argument('--out_todi_sh',
                    help='Output TODI, with SH coefficients.')
 
-    p.add_argument('--out_todi_peaks')
+    p.add_argument('--out_peaks')
     p.add_argument('--out_peaks_indices')
 
     p.add_argument('--at', type=float, default=0.0)
@@ -107,8 +107,8 @@ def main():
         output_file_list.append(args.out_todi_sf)
     if args.out_todi_sh:
         output_file_list.append(args.out_todi_sh)
-    if args.out_todi_peaks:
-        output_file_list.append(args.out_todi_peaks)
+    if args.out_peaks:
+        output_file_list.append(args.out_peaks)
     if args.out_peaks_indices:
         output_file_list.append(args.out_peaks_indices)
 
@@ -173,7 +173,7 @@ def main():
         img = nib.Nifti1Image(img.astype(np.float32), affine)
         img.to_filename(args.out_todi_sf)
 
-    if args.out_todi_peaks or args.out_peaks_indices:
+    if args.out_peaks or args.out_peaks_indices:
         sf = todi_obj.get_todi()
         sphere = get_sphere(args.sphere)
         peaks = np.zeros((sf.shape[0], 10, 3))
@@ -187,9 +187,9 @@ def main():
             indices[i, :len(dirs)] = inds
         peaks = todi_obj.reshape_to_3d(peaks.reshape((sf.shape[0], -1)))
         indices = todi_obj.reshape_to_3d(indices)
-        if args.out_todi_peaks:
+        if args.out_peaks:
             nib.save(nib.Nifti1Image(peaks.astype(np.float32), affine),
-                     args.out_todi_peaks)
+                     args.out_peaks)
         if args.out_peaks_indices:
             nib.save(nib.Nifti1Image(indices.astype(np.uint32), affine),
                      args.out_peaks_indices)
