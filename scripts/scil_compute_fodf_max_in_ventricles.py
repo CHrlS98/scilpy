@@ -12,13 +12,14 @@ import argparse
 import logging
 
 from dipy.data import get_sphere
+from dipy.reconst.shm import sh_to_sf_matrix
 import nibabel as nib
 import numpy as np
 
 from scilpy.io.utils import (add_overwrite_arg,
                              add_sh_basis_args, add_verbose_arg,
                              assert_inputs_exist, assert_outputs_exist)
-from scilpy.reconst.utils import find_order_from_nb_coeff, get_b_matrix
+from scilpy.reconst.utils import get_sh_order_and_fullness, get_b_matrix
 
 
 EPILOG = """
@@ -68,9 +69,9 @@ def _build_arg_parser():
 
 
 def get_ventricles_max_fodf(data, fa, md, zoom, args):
-    order = find_order_from_nb_coeff(data)
+    order, full_basis = get_sh_order_and_fullness(data.shape[-1])
     sphere = get_sphere('repulsion100')
-    b_matrix = get_b_matrix(order, sphere, args.sh_basis)
+    b_matrix = sh_to_sf_matrix(sphere, order, args.sh_basis, full_basis, return_inv=False)
     sum_of_max = 0
     count = 0
 
@@ -111,7 +112,7 @@ def get_ventricles_max_fodf(data, fa, md, zoom, args):
                     continue
                 if fa[i, j, k] < args.fa_threshold \
                         and md[i, j, k] > args.md_threshold:
-                    sf = np.dot(data[i, j, k], b_matrix.T)
+                    sf = np.dot(data[i, j, k], b_matrix)
                     sum_of_max += sf.max()
                     count += 1
                     mask[i, j, k] = 1

@@ -304,7 +304,7 @@ def create_texture_slicer(texture, orientation, slice_index, mask=None,
 
 def create_peaks_slicer(data, orientation, slice_index, peak_values=None,
                         mask=None, color=None, peaks_width=1.0,
-                        symmetric=False):
+                        symmetric=False, opacity=1.0):
     """
     Create a peaks slicer actor rendering a slice of the fODF peaks
 
@@ -343,7 +343,7 @@ def create_peaks_slicer(data, orientation, slice_index, peak_values=None,
     peaks_slicer = actor.peak_slicer(data, peaks_values=peak_values,
                                      mask=mask, colors=color,
                                      linewidth=peaks_width,
-                                     symmetric=symmetric)
+                                     symmetric=symmetric, opacity=opacity)
     set_display_extent(peaks_slicer, orientation, data.shape, slice_index)
 
     return peaks_slicer
@@ -453,7 +453,8 @@ def create_tube_with_radii(positions, radii, error, error_coloring=False,
 
 
 def create_scene(actors, orientation, slice_index,
-                 volume_shape, bg_color=(0, 0, 0)):
+                 volume_shape, bg_color=(0, 0, 0),
+                 translation=(0, 0, 0), zoom_factor=1.0):
     """
     Create a 3D scene containing actors fitting inside a grid. The camera is
     placed based on the orientation supplied by the user. The projection mode
@@ -479,14 +480,20 @@ def create_scene(actors, orientation, slice_index,
     """
     # Configure camera
     camera = initialize_camera(orientation, slice_index, volume_shape)
+    # print("POS:", camera[CamParams.VIEW_POS])
+    # print("CENTER:", camera[CamParams.VIEW_CENTER])
+    # print("UP:", camera[CamParams.VIEW_UP])
+    # print("ZOOM:", camera[CamParams.ZOOM_FACTOR])
+
+    T = np.array(translation, dtype=float)
 
     scene = window.Scene()
     scene.background(bg_color)
     scene.projection('parallel')
-    scene.set_camera(position=camera[CamParams.VIEW_POS],
-                     focal_point=camera[CamParams.VIEW_CENTER],
+    scene.set_camera(position=camera[CamParams.VIEW_POS] + T,
+                     focal_point=camera[CamParams.VIEW_CENTER] + T,
                      view_up=camera[CamParams.VIEW_UP])
-    scene.zoom(camera[CamParams.ZOOM_FACTOR])
+    scene.zoom(camera[CamParams.ZOOM_FACTOR]*zoom_factor)
 
     # Add actors to the scene
     for curr_actor in actors:

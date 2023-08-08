@@ -14,6 +14,9 @@ import logging
 import nibabel as nib
 import numpy as np
 
+from dipy.direction.peaks import peak_directions
+from dipy.data import get_sphere
+
 from scilpy.io.image import get_data_as_mask
 from scilpy.io.streamlines import load_tractogram_with_reference
 from scilpy.io.utils import (add_overwrite_arg, add_reference_arg,
@@ -60,6 +63,12 @@ def _build_arg_parser():
     p.add_argument('--out_todi_sh',
                    help='Output TODI, with SH coefficients.')
 
+    p.add_argument('--out_todi_peaks')
+    p.add_argument('--out_peaks_indices')
+
+    p.add_argument('--at', type=float, default=0.0)
+    p.add_argument('--rt', type=float, default=0.1)
+
     p.add_argument('--sh_order', type=int, default=8,
                    help='Order of the original SH. [%(default)s]')
 
@@ -98,6 +107,10 @@ def main():
         output_file_list.append(args.out_todi_sf)
     if args.out_todi_sh:
         output_file_list.append(args.out_todi_sh)
+    if args.out_todi_peaks:
+        output_file_list.append(args.out_todi_peaks)
+    if args.out_peaks_indices:
+        output_file_list.append(args.out_peaks_indices)
 
     if not output_file_list:
         parser.error('No output to be done')
@@ -159,6 +172,27 @@ def main():
         img = todi_obj.reshape_to_3d(img)
         img = nib.Nifti1Image(img.astype(np.float32), affine)
         img.to_filename(args.out_todi_sf)
+
+    if args.out_todi_peaks or args.out_peaks_indices:
+        sf = todi_obj.get_todi()
+        sphere = get_sphere(args.sphere)
+        peaks = np.zeros((sf.shape[0], 10, 3))
+        indices = np.zeros((sf.shape[0], 10))
+        for i, odf in enumerate(sf):
+            odf[odf < 0] = args.at
+            dirs, vals, inds = peak_directions(odf, sphere, args.rt,
+                                               is_symmetric=not(args.asymmetric),
+                                               min_separation_angle=25)
+            peaks[i, :len(dirs)] = dirs
+            indices[i, :len(dirs)] = inds
+        peaks = todi_obj.reshape_to_3d(peaks.reshape((sf.shape[0], -1)))
+        indices = todi_obj.reshape_to_3d(indices)
+        if args.out_todi_peaks:
+            nib.save(nib.Nifti1Image(peaks.astype(np.float32), affine),
+                     args.out_todi_peaks)
+        if args.out_peaks_indices:
+            nib.save(nib.Nifti1Image(indices.astype(np.uint32), affine),
+                     args.out_peaks_indices)
 
 
 if __name__ == '__main__':

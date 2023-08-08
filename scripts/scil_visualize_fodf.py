@@ -165,6 +165,11 @@ def _build_arg_parser():
     var.add_argument('--var_color', nargs=3, type=float, default=(1, 1, 1),
                    help='Color of variance outline. Must be RGB values scaled '
                         'between 0 and 1. [%(default)s]')
+    
+    p.add_argument('--translate', nargs=3, default=(0, 0, 0),
+                   help='Translation to apply to the scene. [%(default)s]')
+    
+    p.add_argument('--zoom_factor', default=1.0, type=float)
 
     return p
 
@@ -222,7 +227,7 @@ def _get_data_from_inputs(args):
         data['transparency_mask'] = transparency_mask
     if args.mask:
         assert_same_resolution([args.mask, args.in_fodf])
-        mask = get_data_as_mask(nib.nifti1.load(args.mask), dtype=bool)
+        mask = nib.nifti1.load(args.mask).get_fdata().astype(bool)
         data['mask'] = mask
     if args.peaks:
         assert_same_resolution([args.peaks, args.in_fodf])
@@ -331,7 +336,8 @@ def main():
     scene = create_scene(actors, args.axis_name,
                          args.slice_index,
                          data['fodf'].shape[:3],
-                         args.bg_color)
+                         args.bg_color, args.translate,
+                         args.zoom_factor)
 
     mask_scene = None
     if 'transparency_mask' in data:

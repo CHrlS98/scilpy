@@ -173,13 +173,14 @@ def main():
     sh = sh_img.get_fdata()
 
     sphere = get_sphere(args.sphere)
+    # sphere = sphere.subdivide(2)  # increase peak extraction precision
 
     sh_order, full_basis = get_sh_order_and_fullness(sh.shape[-1])
     if not full_basis and (args.asi_map or args.odd_power_map):
         parser.error('Invalid SH image. A full SH basis is expected.')
 
     if args.mask:
-        mask = get_data_as_mask(nib.load(args.mask), dtype=bool)
+        mask = nib.load(args.mask).get_fdata().astype(bool)
     else:
         mask = np.sum(np.abs(sh), axis=-1) > 0
 
@@ -198,7 +199,7 @@ def main():
             peaks_from_sh(sh, sphere, mask=mask,
                           relative_peak_threshold=args.r_threshold,
                           absolute_threshold=args.a_threshold,
-                          min_separation_angle=25,
+                          min_separation_angle=15,
                           normalize_peaks=False,
                           # because v and -v are unique, we want twice
                           # the usual default value (5) of npeaks
