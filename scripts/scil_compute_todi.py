@@ -65,6 +65,7 @@ def _build_arg_parser():
 
     p.add_argument('--out_peaks')
     p.add_argument('--out_peaks_indices')
+    p.add_argument('--out_peaks_values')
 
     p.add_argument('--at', type=float, default=0.0)
     p.add_argument('--rt', type=float, default=0.1)
@@ -173,26 +174,33 @@ def main():
         img = nib.Nifti1Image(img.astype(np.float32), affine)
         img.to_filename(args.out_todi_sf)
 
-    if args.out_peaks or args.out_peaks_indices:
+    if args.out_peaks or args.out_peaks_indices or args.out_peaks_values:
         sf = todi_obj.get_todi()
         sphere = get_sphere(args.sphere)
         peaks = np.zeros((sf.shape[0], 10, 3))
         indices = np.zeros((sf.shape[0], 10))
+        values = np.zeros((sf.shape[0], 10))
         for i, odf in enumerate(sf):
-            odf[odf < 0] = args.at
+            odf[odf < args.at] = 0.0
             dirs, vals, inds = peak_directions(odf, sphere, args.rt,
                                                is_symmetric=not(args.asymmetric),
                                                min_separation_angle=25)
-            peaks[i, :len(dirs)] = dirs
-            indices[i, :len(dirs)] = inds
+            n_peaks = min(len(dirs), 10)
+            peaks[i, :n_peaks] = dirs[:n_peaks]
+            indices[i, :n_peaks] = inds[:n_peaks]
+            values[i, :n_peaks] = vals[:n_peaks]
         peaks = todi_obj.reshape_to_3d(peaks.reshape((sf.shape[0], -1)))
         indices = todi_obj.reshape_to_3d(indices)
+        values = todi_obj.reshape_to_3d(values)
         if args.out_peaks:
             nib.save(nib.Nifti1Image(peaks.astype(np.float32), affine),
                      args.out_peaks)
         if args.out_peaks_indices:
             nib.save(nib.Nifti1Image(indices.astype(np.uint32), affine),
                      args.out_peaks_indices)
+        if args.out_peaks_values:
+            nib.save(nib.Nifti1Image(values.astype(np.float32), affine),
+                     args.out_peaks_values)
 
 
 if __name__ == '__main__':

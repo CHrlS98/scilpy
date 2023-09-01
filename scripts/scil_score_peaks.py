@@ -8,15 +8,18 @@ import nibabel as nib
 import numpy as np
 import pandas as pd
 
+from scilpy.segment.voxlabel import classify_peaks_asym
+
 STRAIGHT_EPSILON = -0.9999
 CLASSES = {
     'no_peak': 0,
     'single_peak': 1,
     'straight': 2,
-    'bending': 3,
-    'branching': 4,
-    'crossing': 5,
-    'others': 6
+    'bending': 2.5,
+    'branching': 3,
+    'crossing_sym': 4,
+    'crossing_asym': 4.5,
+    'others': 5
 }
 
 
@@ -25,54 +28,19 @@ def _build_arg_parser():
                                 description=__doc__)
     p.add_argument('in_expected')
     p.add_argument('out_csv')
+    p.add_argument('--in_mask')
     p.add_argument('--in_predicted', required=True, nargs='+')
 
     p.add_argument('--in_expected_labels')
     p.add_argument('--out_expected_labels')
     p.add_argument('--tag')
+    p.add_argument('--bend_tol', default=2.0, type=float)
 
     p.add_argument('--write_mode', choices=['append', 'write'],
                    help="File write mode. `append` will append score to\n"
                         "existing file (won't write csv header). `write` will\n"
                         "create a new file (and write the file header).")
     return p
-
-
-def classify_peaks(peaks):
-    # classes are:
-    # 0. No peaks
-    # 1. 1-peak
-    # 2. Straight fiber
-    # 3. Bending fiber
-    # 4. Branching
-    # 5. Crossing
-    # 6. Others
-    # (it becomes hard to make sense of
-    #  configurations higher than crossing)
-    peak_norms = np.linalg.norm(peaks, axis=-1)
-    nufid = np.count_nonzero(peak_norms, axis=-1)
-    labels = np.zeros_like(nufid)
-
-    # normalize peaks for later
-    peaks[peak_norms > 0] /= peak_norms[peak_norms > 0][..., None]
-
-    # label "obvious" configurations
-    labels[nufid == 1] = CLASSES['single_peak']
-    labels[nufid == 3] = CLASSES['branching']
-    labels[nufid == 4] = CLASSES['crossing']
-
-    # identify two-direction voxels (straight and bending)
-    idx, idy, idz = np.nonzero(nufid == 2)
-    for ind in zip(idx, idy, idz):
-        p0 = peaks[ind][0]
-        p1 = peaks[ind][1]
-        dot = p0.dot(p1)
-        if dot < STRAIGHT_EPSILON:
-            labels[ind] = CLASSES['straight']
-        else:
-            labels[ind] = CLASSES['bending']
-    labels[nufid > 4] = CLASSES['others']
-    return labels
 
 
 def main():
@@ -83,11 +51,18 @@ def main():
     expected_im = nib.load(args.in_expected)
     expected_peaks = np.reshape(expected_im.get_fdata(),
                                 np.append(expected_im.shape[:3], (-1, 3)))
-    expected_labels = classify_peaks(expected_peaks)
-    if args.out_expected_labels:
-        nib.save(nib.Nifti1Image(expected_labels.astype(np.uint8),
-                                 expected_im.affine),
-                 args.out_expected_labels)
+    if args.in_mask:
+        mask = nib.load(args.in_mask).get_fdata().astype(bool)
+    else:
+        mask = None
+
+    expected_labels = classify_peaks_asym(expected_peaks, args.bend_tol)
+    if mask is not None:
+        unique, count = np.unique(expected_labels[mask], return_counts=True)
+    else:
+        unique, count = np.unique(expected_labels, return_counts=True)
+    print('Labels: ', unique)
+    print('Counts: ', count)
 
     results = {
         'tag' : [],
@@ -96,7 +71,8 @@ def main():
         'straight': [],
         'bending': [],
         'branching': [],
-        'crossing': [],
+        'crossing_sym': [],
+        'crossing_asym': [],
         'others': []
     }
 
@@ -108,7 +84,7 @@ def main():
                                     np.append(predicted_im.shape[:3], (-1, 3)))
 
         # 1st. Classify voxels.
-        predicted_labels = classify_peaks(predicted_peaks)
+        predicted_labels = classify_peaks_asym(predicted_peaks, args.bend_tol)
 
         # 2nd. For each voxel class, count TP rate.
         tag = os.path.basename(in_predicted)
@@ -116,9 +92,14 @@ def main():
 
         for label, ind in CLASSES.items():
             prediction_match = np.logical_and(expected_labels == ind, predicted_labels == ind)
+            if mask is not None:
+                prediction_match[~mask] = 0
             nb_hits = np.count_nonzero(prediction_match)
             if nb_hits > 0:
-                rate = float(nb_hits) / float(np.count_nonzero(expected_labels == ind))
+                if mask is not None:
+                    rate = float(nb_hits) / float(np.count_nonzero(expected_labels[mask] == ind))
+                else:  # no mask
+                    rate = float(nb_hits) / float(np.count_nonzero(expected_labels == ind))
             else:
                 rate = 0.0
             results[label].append(rate)
