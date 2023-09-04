@@ -143,7 +143,7 @@ def _build_arg_parser():
     peaks_scale = p.add_argument_group('Peaks scaling arguments', 'Choose '
                                        'between peaks values and arbitrary '
                                        'length.')
-    peaks_scale_group = peaks_scale.add_mutually_exclusive_group()
+    peaks_scale_group = peaks_scale.add_argument_group()
     peaks_scale_group.add_argument('--peaks_values',
                                    help='Peaks values file.')
 
@@ -317,7 +317,8 @@ def main():
     if 'peaks' in data:
 
         if 'peaks_values' in data:
-            peaks_values = data['peaks_values']
+            peaks_values = data['peaks_values'] / np.where(np.max(data['peaks_values'], axis=-1, keepdims=True) > 0,
+                                                           np.max(data['peaks_values'], axis=-1, keepdims=True), 1)
         else:
             peaks_values =\
                 np.ones(data['peaks'].shape[:-1]) * args.peaks_length
@@ -328,7 +329,7 @@ def main():
                                           mask,
                                           args.peaks_color,
                                           args.peaks_width,
-                                          not full_basis)
+                                          False)
 
         actors.append(peaks_actor)
 
