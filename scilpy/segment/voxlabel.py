@@ -2,9 +2,22 @@
 import numpy as np
 
 
+# TODO: Configuration classes (integers; linear)
+CONFIG_CLASSES = {
+    'no_peak': 0,
+    'single_peak': 1,
+    'straight': 2,
+    'bending': 3,
+    'branching': 4,
+    'crossing_sym': 5,
+    'crossing_asym': 6,
+    'other': 7
+}
+
+
 def _classify_two_directions(peaks, cos_tol, nufid, labels):
     #  identify two-direction voxels (straight and bending)
-    idx,idy, idz = np.nonzero(nufid == 2)
+    idx, idy, idz = np.nonzero(nufid == 2)
     for ind in zip(idx, idy, idz):
         p0 = peaks[ind][0]
         p1 = peaks[ind][1]
