@@ -30,7 +30,8 @@ import numpy as np
 from scilpy.io.image import get_data_as_mask
 from scilpy.io.utils import (add_overwrite_arg, assert_inputs_exist,
                              assert_outputs_exist, add_force_b0_arg,
-                             add_sh_basis_args, add_processes_arg)
+                             add_sh_basis_args, add_processes_arg,
+                             add_verbose_arg)
 from scilpy.reconst.multi_processes import fit_from_model, convert_sh_basis
 from scilpy.utils.bvec_bval_tools import (check_b0_threshold, normalize_bvecs,
                                           is_normalized_bvecs)
@@ -39,7 +40,7 @@ from scilpy.utils.bvec_bval_tools import (check_b0_threshold, normalize_bvecs,
 def _build_arg_parser():
 
     p = argparse.ArgumentParser(description=__doc__,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
+                                formatter_class=argparse.RawTextHelpFormatter)
 
     p.add_argument('in_dwi',
                    help='Path of the input diffusion volume.')
@@ -66,6 +67,7 @@ def _build_arg_parser():
     add_sh_basis_args(p)
     add_processes_arg(p)
     add_overwrite_arg(p)
+    add_verbose_arg(p)
 
     p.add_argument(
         '--not_all', action='store_true',
@@ -96,7 +98,7 @@ def _build_arg_parser():
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.getLogger().setLevel(logging.INFO)
 
     if not args.not_all:
         args.wm_out_fODF = args.wm_out_fODF or 'wm_fodf.nii.gz'
@@ -137,6 +139,7 @@ def main():
     # Checking data and sh_order
     b0_thr = check_b0_threshold(
         args.force_b0_threshold, bvals.min(), bvals.min())
+
     if data.shape[-1] < (sh_order + 1) * (sh_order + 2) / 2:
         logging.warning(
             'We recommend having at least {} unique DWIs volumes, but you '
@@ -188,7 +191,7 @@ def main():
         to it. Proceeding to fill the problematic voxels by 0.
         """
         logging.warning(msg.format(nan_count, voxel_count))
-    elif nan_count  > 0:
+    elif nan_count > 0:
         msg = """There are {} voxels out of {} that could not be solved by
         the solver. Make sure to tune the response functions properly, as the
         solving process is very sensitive to it. Proceeding to fill the
@@ -198,12 +201,15 @@ def main():
 
     shm_coeff = np.where(np.isnan(shm_coeff), 0, shm_coeff)
 
+    vf = msmt_fit.volume_fractions
+    vf = np.where(np.isnan(vf), 0, vf)
+
     # Saving results
     if args.wm_out_fODF:
         wm_coeff = shm_coeff[..., 2:]
         if args.sh_basis == 'tournier07':
             wm_coeff = convert_sh_basis(wm_coeff, reg_sphere, mask=mask,
-                                         nbr_processes=args.nbr_processes)
+                                        nbr_processes=args.nbr_processes)
         nib.save(nib.Nifti1Image(wm_coeff.astype(np.float32),
                                  vol.affine), args.wm_out_fODF)
 
@@ -212,7 +218,7 @@ def main():
         if args.sh_basis == 'tournier07':
             gm_coeff = gm_coeff.reshape(gm_coeff.shape + (1,))
             gm_coeff = convert_sh_basis(gm_coeff, reg_sphere, mask=mask,
-                                         nbr_processes=args.nbr_processes)
+                                        nbr_processes=args.nbr_processes)
         nib.save(nib.Nifti1Image(gm_coeff.astype(np.float32),
                                  vol.affine), args.gm_out_fODF)
 
@@ -226,11 +232,10 @@ def main():
                                  vol.affine), args.csf_out_fODF)
 
     if args.vf:
-        nib.save(nib.Nifti1Image(msmt_fit.volume_fractions.astype(np.float32),
+        nib.save(nib.Nifti1Image(vf.astype(np.float32),
                                  vol.affine), args.vf)
 
     if args.vf_rgb:
-        vf = msmt_fit.volume_fractions
         vf_rgb = vf / np.max(vf) * 255
         vf_rgb = np.clip(vf_rgb, 0, 255)
         nib.save(nib.Nifti1Image(vf_rgb.astype(np.uint8),

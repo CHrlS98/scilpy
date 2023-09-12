@@ -50,7 +50,7 @@ def create_index(bvals, n_rev=0):
     index: np.array
     """
     index = np.ones(len(bvals), dtype=int)
-    index[n_rev:] += 1
+    index[len(index)-n_rev:] += 1
 
     return index.tolist()
 
@@ -99,11 +99,11 @@ def create_multi_topup_index(bvals, mean, n_rev, b0_thr=0):
             dw_clumps = dw_clumps[1:]
 
         for s1, s2 in zip(b0_clumps[:len(dw_clumps)], dw_clumps):
-            if mean is "none":
+            if mean == "none":
                 index[s1] = np.arange(cnt, cnt + s1.stop - s1.start)
                 index[s2] = index[s1.stop - 1]
                 cnt += s1.stop - s1.start
-            elif mean is "cluster":
+            elif mean == "cluster":
                 index[s1] = index[s2] = cnt
                 cnt += 1
             else:
@@ -111,11 +111,11 @@ def create_multi_topup_index(bvals, mean, n_rev, b0_thr=0):
                                  'index determination : {}'.format(mean))
 
         if len(b0_clumps) > len(dw_clumps):
-            if mean is "none":
+            if mean == "none":
                 index[b0_clumps[-1]] = np.arange(
                     cnt, cnt + b0_clumps[-1].stop - b0_clumps[-1].start)
                 cnt += b0_clumps[-1].stop - b0_clumps[-1].start
-            elif mean is "cluster":
+            elif mean == "cluster":
                 index[b0_clumps[-1]] = cnt
                 cnt += 1
             else:

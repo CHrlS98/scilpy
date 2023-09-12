@@ -27,7 +27,7 @@ from scilpy.io.utils import (add_json_args,
                              add_reference_arg,
                              assert_inputs_exist,
                              assert_outputs_exist)
-from scilpy.tractanalysis.reproducibility_measures import \
+from scilpy.tractograms.streamline_and_mask_operations import \
     get_head_tail_density_maps
 
 
@@ -45,6 +45,8 @@ def _build_arg_parser():
     p.add_argument('--swap', action='store_true',
                    help='Swap head<->tail convention. '
                         'Can be useful when the reference is not in RAS.')
+    p.add_argument('--binary', action='store_true',
+                   help="Save outputs as a binary mask instead of a heat map.")
 
     add_json_args(p)
     add_reference_arg(p)
@@ -80,6 +82,10 @@ def main():
 
     endpoints_map_head, endpoints_map_tail = \
         get_head_tail_density_maps(sft.streamlines, dim)
+
+    if args.binary:
+        endpoints_map_head = (endpoints_map_head > 0).astype(np.int16)
+        endpoints_map_tail = (endpoints_map_tail > 0).astype(np.int16)
 
     nib.save(nib.Nifti1Image(endpoints_map_head, transfo), head_name)
     nib.save(nib.Nifti1Image(endpoints_map_tail, transfo), tail_name)

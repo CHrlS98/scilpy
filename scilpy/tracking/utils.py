@@ -22,7 +22,9 @@ def add_mandatory_options_tracking(p):
                    help='Seeding mask (.nii.gz).')
     p.add_argument('in_mask',
                    help='Tracking mask (.nii.gz).\n'
-                        'Tracking will stop outside this mask.')
+                        'Tracking will stop outside this mask. The last point '
+                        'of each \nstreamline (triggering the stopping '
+                        'criteria) IS added to the streamline.')
     p.add_argument('out_tractogram',
                    help='Tractogram output file (must be .trk or .tck).')
 
@@ -40,7 +42,9 @@ def add_tracking_options(p):
                          help='Maximum length of a streamline in mm. '
                               '[%(default)s]')
     track_g.add_argument('--theta', type=float,
-                         help='Maximum angle between 2 steps.\n'
+                         help='Maximum angle between 2 steps. If the angle is '
+                              'too big, streamline is \nstopped and the '
+                              'following point is NOT included.\n'
                               '["eudx"=60, "det"=45, "prob"=20]')
     track_g.add_argument('--sfthres', dest='sf_threshold', metavar='sf_th',
                          type=float, default=0.1,
@@ -79,12 +83,13 @@ def add_out_options(p):
 
 
 def verify_streamline_length_options(parser, args):
-    if not args.min_length > 0:
-        parser.error('min_length must be > 0, {}mm was provided.'
+    if not args.min_length >= 0:
+        parser.error('min_length must be >= 0, but {}mm was provided.'
                      .format(args.min_length))
     if args.max_length < args.min_length:
-        parser.error('max_length must be > than minL, but minL={}mm and '
-                     'maxL={}mm.'.format(args.min_length, args.max_length))
+        parser.error('max_length must be > than min_length, but '
+                     'min_length={}mm and max_length={}mm.'
+                     .format(args.min_length, args.max_length))
 
 
 def verify_seed_options(parser, args):

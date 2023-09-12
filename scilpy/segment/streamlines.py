@@ -7,7 +7,8 @@ from dipy.tracking.metrics import length
 from dipy.tracking.streamline import set_number_of_points
 from dipy.tracking.vox2track import _streamlines_in_mask
 from nibabel.affines import apply_affine
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import (map_coordinates, generate_binary_structure,
+                           binary_dilation)
 
 import numpy as np
 
@@ -65,17 +66,16 @@ def filter_grid_roi_both(sft, mask_1, mask_2):
         Binary mask in which the streamlines should start or end.
     Returns
     -------
-    ids : tuple
+    new_sft: StatefulTractogram
         Filtered sft.
+    ids: list
         Ids of the streamlines passing through the mask.
     """
-    line_based_indices = []
     sft.to_vox()
     sft.to_corner()
     streamline_vox = sft.streamlines
     # For endpoint filtering, we need to keep 2 separately
     # Could be faster for either end, but the code look cleaner like this
-    line_based_indices = []
     voxel_beg = np.asarray([s[0] for s in streamline_vox],
                            dtype=np.int16).transpose(1, 0)
     voxel_end = np.asarray([s[-1] for s in streamline_vox],
@@ -105,24 +105,31 @@ def filter_grid_roi_both(sft, mask_1, mask_2):
     return new_sft, line_based_indices
 
 
-def filter_grid_roi(sft, mask, filter_type, is_exclude):
+def filter_grid_roi(sft, mask, filter_type, is_exclude, filter_distance=0):
     """
     Parameters
     ----------
     sft : StatefulTractogram
         StatefulTractogram containing the streamlines to segment.
-    target_mask : numpy.ndarray
+    mask : numpy.ndarray
         Binary mask in which the streamlines should pass.
     filter_type: str
-        One of the 3 following choices, 'any', 'all', 'either_end', 'both_ends'.
+        One of the 4 following choices, 'any', 'all', 'either_end', 'both_ends'.
     is_exclude: bool
         Value to indicate if the ROI is an AND (false) or a NOT (true).
     Returns
     -------
-    ids : tuple
+    new_sft: StatefulTractogram
         Filtered sft.
+    ids: list
         Ids of the streamlines passing through the mask.
     """
+
+    if filter_distance != 0:
+        bin_struct = generate_binary_structure(3, 2)
+        mask = binary_dilation(mask, bin_struct,
+                               iterations=filter_distance)
+
     line_based_indices = []
     if filter_type in ['any', 'all']:
         line_based_indices = streamlines_in_mask(sft, mask,

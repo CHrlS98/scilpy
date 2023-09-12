@@ -1,17 +1,51 @@
 # -*- coding: utf-8 -*-
-
-import hashlib
 import logging
+import hashlib
 import os
-import shutil
-from time import sleep
+import pathlib
+import requests
 import zipfile
 
-from google_drive_downloader import GoogleDriveDownloader as gdd
+GOOGLE_URL = "https://drive.google.com/uc?"
+
+def download_file_from_google_drive(id, destination):
+    """
+    Download large file from Google Drive.
+    Parameters
+    ----------
+    id: str
+        id of file to be downloaded
+    destination: str
+        path to destination file with its name and extension
+    """
+    def get_confirm_token(response):
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                return value
+
+        return None
+
+    def save_response_content(response, destination):
+        CHUNK_SIZE = 32768
+
+        with open(destination, "wb") as f:
+            for chunk in response.iter_content(CHUNK_SIZE):
+                f.write(chunk)
+
+    session = requests.Session()
+    params = {'id': id, 'confirm': True}
+    response = session.get(GOOGLE_URL, params=params, stream=True)
+    token = get_confirm_token(response)
+
+    if token:
+        params['confirm'] = token
+        response = session.get(GOOGLE_URL, params=params, stream=True)
+
+    save_response_content(response, destination)
 
 
-# Set a user-writeable file-system location to put files:
 def get_home():
+    """ Set a user-writeable file-system location to put files. """
     if 'SCILPY_HOME' in os.environ:
         scilpy_home = os.environ['SCILPY_HOME']
     else:
@@ -21,7 +55,10 @@ def get_home():
 
 def get_testing_files_dict():
     """ Get dictionary linking zip file to their GDrive ID & MD5SUM """
-    return {'plot.zip':
+    return {'bids_json.zip':
+            ['1bMl5YtEufoKh-gjen940QTO5BpT5Y9TF',
+             '521eed4911c456cc10cc3cb1f6a5dc83'],
+            'plot.zip':
             ['1Ab-oVWI1Fu7fHTEz1H3-s1TfR_oW-GOE',
              'cca8f1e19da357f44365a7e27b9029ca'],
             'ihMT.zip':
@@ -65,115 +102,72 @@ def get_testing_files_dict():
              '3e27625a1e7f2484b7fa5028c95324cc'],
             'stats.zip':
             ['1vsM7xuU0jF5fL5PIgN6stAH7oO683tw0',
-             'bcc21835cf0bf7210bdc99ba5d8df44b'],
+             '03aed629dea754bbc2041e7ab5f94112'],
             'anatomical_filtering.zip':
             ['1Li8DdySnMnO9Gich4pilhXisjkjz1-Dy',
-             '6f0eff5154ff0973a3dc26db00e383ea']}
-
-
-def _get_file_md5(filename):
-    """ Compute the md5 checksum of a file """
-    md5_data = hashlib.md5()
-    with open(filename, 'rb') as f:
-        for chunk in iter(lambda: f.read(128 * md5_data.block_size), b''):
-            md5_data.update(chunk)
-    return md5_data.hexdigest()
-
-
-def check_md5(filename, stored_md5=None):
-    """
-    Computes the md5 of filename and check if it matches with the supplied
-    string md5
-
-    Parameters
-    -----------
-    filename : string
-        Path to a file.
-    md5 : string
-        Known md5 of filename to check against.
-        If None (default), checking is skipped
-    """
-    if stored_md5 is not None:
-        computed_md5 = _get_file_md5(filename)
-        if stored_md5 != computed_md5:
-            return False
-    return True
-
-
-def _unzip(zip_file, folder):
-    """ Extract the content of a zip file into a specific folder """
-    z = zipfile.ZipFile(zip_file, 'r')
-    z.extractall(folder)
-    z.close()
-    logging.info('Files successfully extracted')
+             '6f0eff5154ff0973a3dc26db00e383ea'],
+            'btensor_testdata.zip':
+            ['1AMsKlbOZyPnT9TAbxcFzHS1b29aJWKDg',
+             '7c68524fca01268203dc8bfee340f037'],
+            'fodf_filtering.zip':
+            ['1iyoX2ltLOoLer-v-49LHOzopHCFZ_Tv6',
+             'e79c4291af584fdb25814aa7b403a6ce']}
 
 
 def fetch_data(files_dict, keys=None):
-    """ Downloads files to folder and checks their md5 checksums
-
-    Parameters
-    ----------
-    files_dict : dictionary
-        For each file in `files_dict` the value should be (url, md5).
-        The file will be downloaded from url, if the file does not already
-        exist or if the file exists but the md5 checksum does not match.
-
-    Raises
-    ------
-    ValueError
-        Raises if the md5 checksum of the file does not match the expected
-        value. The downloaded file is not deleted when this error is raised.
+    """
+    Fetch data. Typical use would be with gdown.
+    But with too many data accesses, downloaded become denied.
+    Using trick from https://github.com/wkentaro/gdown/issues/43.
     """
     scilpy_home = get_home()
 
     if not os.path.exists(scilpy_home):
         os.makedirs(scilpy_home)
 
-    to_unzip = {}
     if keys is None:
         keys = files_dict.keys()
     elif isinstance(keys, str):
         keys = [keys]
     for f in keys:
-        tryout = 0
-        while tryout < 3:
-            to_unzip[f] = False
-            url, md5 = files_dict[f]
-            full_path = os.path.join(scilpy_home, f)
+        url_id, md5 = files_dict[f]
+        full_path = os.path.join(scilpy_home, f)
+        full_path_no_ext, ext = os.path.splitext(full_path)
 
-            # Zip file already exists and has the right md5sum
-            if os.path.exists(full_path) and (_get_file_md5(full_path) == md5):
-                break
-            elif os.path.exists(full_path):
-                if tryout > 0:
-                    logging.error('Wrong md5sum after {} attemps for {}'
-                                  .format(tryout+1, full_path))
-                os.remove(full_path)
+        CURR_URL = GOOGLE_URL + 'id=' + url_id
+        if not os.path.isdir(full_path_no_ext):
+            if ext == '.zip' and not os.path.isdir(full_path_no_ext):
+                logging.warning('Downloading and extracting {} from url {} to '
+                                '{}'.format(f, CURR_URL, scilpy_home))
 
-            # If we re-download, we re-extract
-            to_unzip[f] = True
-            logging.info('Downloading {} to {}'.format(f, scilpy_home))
-            gdd.download_file_from_google_drive(file_id=url,
-                                                dest_path=full_path,
-                                                unzip=False)
+                # Robust method to Virus/Size check from GDrive
+                download_file_from_google_drive(url_id, full_path)
 
-            if check_md5(full_path, md5):
-                break
+                with open(full_path, 'rb') as file_to_check:
+                    data = file_to_check.read()
+                    md5_returned = hashlib.md5(data).hexdigest()
+                if md5_returned != md5:
+                    raise ValueError('MD5 mismatch for file {}.'.format(f))
+
+                try:
+                    # If there is a root dir, we want to skip one level.
+                    z = zipfile.ZipFile(full_path)
+                    zipinfos = z.infolist()
+                    root_dir = pathlib.Path(
+                        zipinfos[0].filename).parts[0] + '/'
+                    assert all([s.startswith(root_dir) for s in z.namelist()])
+                    nb_root = len(root_dir)
+                    for zipinfo in zipinfos:
+                        zipinfo.filename = zipinfo.filename[nb_root:]
+                        if zipinfo.filename != '':
+                            z.extract(zipinfo, path=full_path_no_ext)
+                except AssertionError:
+                    # Not root dir. Extracting directly.
+                    z.extractall(full_path)
             else:
-                tryout += 1
-                sleep(10)
+                raise NotImplementedError("Data fetcher was expecting to deal "
+                                          "with a zip file.")
 
-    for f in keys:
-        target_zip = os.path.join(scilpy_home, f)
-        target_dir = os.path.splitext(os.path.join(scilpy_home,
-                                                   os.path.basename(f)))[0]
-
-        if os.path.isdir(target_dir):
-            if to_unzip[f]:
-                shutil.rmtree(target_dir)
-                _unzip(target_zip, scilpy_home)
-            else:
-                logging.info('{} already extracted'.format(target_zip))
         else:
-            _unzip(target_zip, scilpy_home)
-            logging.info('{} successfully extracted'.format(target_zip))
+            # toDo. Verify that data on disk is the right one.
+            logging.warning("Not fetching data; already on disk.")

@@ -1,66 +1,171 @@
-import nibabel as nib
+# -*- coding: utf-8 -*-
+
+"""
+Tractometry
+-----------
+
+Global connectivity metrics:
+    Computed by default:
+    - VS: valid streamlines, belonging to a bundle (i.e. respecting all the
+        criteria for that bundle; endpoints, limit_mask, gt_mask.).
+    - IS: invalid streamlines. All other streamlines. IS = IC + NC.
+
+    Optional:
+    - WPC: wrong path connections, streamlines connecting correct ROIs but not
+        respecting the other criteria for that bundle. Such streamlines always
+        exist but they are only saved separately if specified in the options.
+        Else, they are merged back with the IS.
+        ** By definition. WPC are only computed if "limits masks" are provided.
+    - IC: invalid connections, streamlines joining an incorrect combination of
+        ROIs. Use carefully, quality depends on the quality of your ROIs and no
+        analysis is done on the shape of the streamlines.
+    - NC: no connections. Invalid streamlines minus invalid connections.
+
+Fidelity metrics:
+    - OL : Overlap. Percentage of ground truth voxels containing streamline(s)
+        for a given bundle.
+    - OR: Overreach. Amount of voxels containing streamline(s) when they
+        shouldn't, for a given bundle. We compute two versions :
+        OR_pct_vs = divided by the total number of voxel covered by the bundle.
+           (percentage of the voxels touched by VS).
+           Values range between 0 and 100%. Values are not defined when we
+           recovered no streamline for a bundle, but we set the OR_pct_vs to 0
+           in that case.
+        OR_pct_gt = divided by the total size of the ground truth bundle mask.
+           Values could be higher than 100%.
+    - f1 score (which is the same as the Dice score).
+"""
+
+import logging
+
 import numpy as np
-import os
 
 from dipy.io.stateful_tractogram import StatefulTractogram
-from dipy.tracking.utils import length
-from nibabel.streamlines import ArraySequence
-from scipy.ndimage import binary_dilation
-from sklearn.cluster import KMeans
 
-from scilpy.io.image import get_data_as_mask
-from scilpy.io.streamlines import load_tractogram_with_reference
-from scilpy.segment.streamlines import filter_grid_roi, filter_grid_roi_both
-from scilpy.tractanalysis.features import remove_loops_and_sharp_turns
-from scilpy.tractanalysis.reproducibility_measures import \
-    get_endpoints_density_map
 from scilpy.tractanalysis.streamlines_metrics import compute_tract_counts_map
-from scilpy.utils.filenames import split_name_with_nii
+
+from scilpy.tractograms.streamline_and_mask_operations import \
+    get_endpoints_density_map
 
 
-def extract_streamlines(mask_1, mask_2, sft):
+def compute_f1_score(overlap, overreach):
     """
-    Recognize streamlines between two masks
+    Compute the F1 score between overlap and overreach (they must be
+    percentages).
 
     Parameters
-    ----------
-    mask_1 : numpy.ndarray
-        Mask containing one end of the bundle to be recognized.
-    mask_2 : numpy.ndarray
-        Mask containing the other end of the bundle to be recognized.
-    sft : StatefulTractogram
-        StatefulTractogram containing the streamlines to segment.
+    ------
+    overlap: float, The overlap value.
+    overreach: float, The overreach value
+        (Version normalized over bundle area, not version normalized over gt).
 
     Returns
     -------
-    extracted_sft: StatefulTractogram
-        Tractogram containing the streamlines recognized.
-    remaining_sft : StatefulTractogram
-        Tractogram containing the streamlines not recognized.
+    f1_score: float, The f1 score.
+
+    Ref: https://en.wikipedia.org/wiki/F1_score
     """
+    # In the case where overlap = 0 (found the bundle but entirely out of the
+    # mask; overreach = 100%), we avoid division by 0 and define f1 as 0.
+    if overlap == 0 and overreach == 1:
+        return 0.
 
-    extracted_sft, ids = filter_grid_roi_both(
-        sft, mask_1, mask_2)
-    remaining_ids = np.setdiff1d(range(len(sft.streamlines)), ids)
-    remaining_sft = sft[list(remaining_ids)]
+    # Recall = True positive / (True positive + False negative)
+    #        = |B inter A| / |A|
+    #        = overlap
+    recall = overlap
+    # Precision = True positive / (True positive + False positive)
+    #        = |B inter A| / |B|
+    #        = 1 - |B except A| / |B|
+    #        = 1 - overreach
+    precision = 1.0 - overreach
+    f1_score = 2.0 * (precision * recall) / (precision + recall)
+    return f1_score
 
-    return extracted_sft, remaining_sft
 
-
-def get_binary_maps(streamlines, sft):
+def compute_f1_overlap_overreach(current_vb_voxels, gt_mask, dimensions):
     """
-    Extract a mask from a bundle
+    Compute f1, OL and OR/ORn based on a ground truth mask.
+
+    Parameters
+    ------
+    current_vb_voxels: 3D array
+        The voxels touched by at least one streamlines for a given bundle.
+    gt_mask: 3D array
+        The ground truth mask.
+    dimensions: np.array
+        The nibabel dimensions of the data (3D).
+
+    Returns
+    -------
+    f1: float
+        The f1 score.
+    tp_nb_voxels: int
+        The TP (true positive) count in number of voxels.
+    fp_nb_voxels: int
+        The FP (false positive) count in number of voxels.
+        Hint: Divide it by the ground truth count to get the overreach, or
+        by the recovered bundle count to get the ORn (scores used in the
+        ismrm2015 tractography challenge).
+    fn_nb_voxels: int
+        The number of voxels from the gt_mask that have not been recovered;
+        corresponds to the FN count (false negative).
+    overlap: float
+        TP divided by the ground truth count (i.e. TP + FN), in percentage.
+    overreach_pct_gt: float
+        The overreach, normalized by the ground truth area.
+    overreach_pct_vs: float
+        The overreach, normalized by the recovered bundle's area. (Or 0 if
+        no streamline have been recovered for this bundle).
+    """
+    # True positive = |B inter A|
+    tp_mask = gt_mask * current_vb_voxels
+    tp_nb_voxels = np.count_nonzero(tp_mask)
+
+    # False positive = |B except A|
+    fp_mask = np.zeros(dimensions)
+    fp_mask[np.where(
+        (gt_mask == 0) & (current_vb_voxels >= 1))] = 1
+    fp_nb_voxels = np.count_nonzero(fp_mask)
+
+    # False negative = |A except B|
+    fn_mask = np.zeros(dimensions)
+    fn_mask[np.where(
+        (gt_mask == 1) & (current_vb_voxels == 0))] = 1
+    fn_nb_voxels = np.count_nonzero(fn_mask)
+
+    gt_total_nb_voxels = tp_nb_voxels + fn_nb_voxels
+    # Same as np.count_nonzero(gt_mask)
+
+    nb_voxels_total = tp_nb_voxels + fp_nb_voxels
+    # Same as np.count_nonzero(current_vb_voxels)
+
+    # Overlap = |B inter A| / |A|
+    overlap = tp_nb_voxels / gt_total_nb_voxels
+
+    # Overreach: two versions are sometimes used.
+    # |B except A| / |A| or |B except A| / |B|
+    if nb_voxels_total == 0:
+        overreach_pct_vs = 0
+    else:
+        overreach_pct_vs = fp_nb_voxels / nb_voxels_total
+    overreach_pct_gt = fp_nb_voxels / gt_total_nb_voxels
+
+    # f1 score (=dice)
+    f1 = compute_f1_score(overlap, overreach_pct_vs)
+
+    return (f1, tp_nb_voxels, fp_nb_voxels, fn_nb_voxels,
+            overlap, overreach_pct_gt, overreach_pct_vs)
+
+
+def get_binary_maps(sft):
+    """
+    Extract a mask from a bundle.
 
     Parameters
     ----------
-    streamlines: list
-        List of streamlines.
-    dimensions: tuple of ints
-        Dimensions of the mask.
-    sft : StatefulTractogram
-        Reference tractogram.
-    invalid: bool
-        If true, remove invalid streamlines from tractogram.
+    sft: StatefulTractogram
+        Bundle.
 
     Returns
     -------
@@ -69,22 +174,17 @@ def get_binary_maps(streamlines, sft):
     endpoints_voxels: numpy.ndarray
         Mask representing the bundle's endpoints.
     """
-    dimensions = sft.dimensions
-    if not len(streamlines):
-        return np.zeros(dimensions), np.zeros(dimensions)
-    elif len(streamlines) == 1:
-        streamlines = [streamlines]
-    tmp_sft = StatefulTractogram.from_sft(streamlines, sft)
-    tmp_sft.to_vox()
-    tmp_sft.to_corner()
+    sft.to_vox()
+    sft.to_corner()
+    _, dimensions, _, _ = sft.space_attributes
 
-    if len(tmp_sft) == 1:
+    if len(sft) == 0:
         return np.zeros(dimensions), np.zeros(dimensions)
 
-    bundles_voxels = compute_tract_counts_map(tmp_sft.streamlines,
+    bundles_voxels = compute_tract_counts_map(sft.streamlines,
                                               dimensions).astype(np.int16)
 
-    endpoints_voxels = get_endpoints_density_map(tmp_sft.streamlines,
+    endpoints_voxels = get_endpoints_density_map(sft.streamlines,
                                                  dimensions).astype(np.int16)
 
     bundles_voxels[bundles_voxels > 0] = 1
@@ -93,292 +193,177 @@ def get_binary_maps(streamlines, sft):
     return bundles_voxels, endpoints_voxels
 
 
-def compute_gt_masks(gt_bundles, parser, args):
+def compute_tractometry(
+        vb_sft_list, wpc_sft_list, ib_sft_list, nc_sft, args,
+        bundles_names, gt_masks, dimensions, ib_names):
     """
-    Compute ground-truth masks. If the ground-truth is
-    already a mask, load it. If the ground-truth is a
-    bundle, compute the mask.
-
-    Parameters
-    ----------
-    gt_bundles: list
-        List of either StatefulTractograms or niftis.
-    parser: ArgumentParser
-        Argument parser which handles the script's arguments.
-    args: Namespace
-        List of arguments passed to the script.
-
-    Returns
-    -------
-    mask_1: numpy.ndarray
-        "Head" of the mask.
-    mask_2: numpy.ndarray
-        "Tail" of the mask.
+    Tractometry stats: First in terms of connections (NC, IC, VS, WPC), then
+    in terms of volume (OL, OR, Dice score)
     """
+    logging.info("Computing tractometry")
 
-    gt_bundle_masks = []
-    gt_bundle_inv_masks = []
+    vs_per_bundle = [len(x) if x is not None else 0 for x in vb_sft_list]
+    vb_count = np.count_nonzero(vs_per_bundle)
+    vs_count = np.sum(vs_per_bundle)
 
-    for gt_bundle in args.gt_bundles:
-        # Support ground truth as streamlines or masks
-        # Will be converted to binary masks immediately
-        _, ext = split_name_with_nii(gt_bundle)
-        if ext in ['.gz', '.nii.gz']:
-            gt_img = nib.load(gt_bundle)
-            gt_mask = get_data_as_mask(gt_img)
-            affine = gt_img.affine
-            dimensions = gt_mask.shape
-        else:
-            gt_sft = load_tractogram_with_reference(
-                parser, args, gt_bundle, bbox_check=False)
-            gt_sft.to_vox()
-            gt_sft.to_corner()
-            affine, dimensions, _, _ = gt_sft.space_attributes
-            gt_mask = compute_tract_counts_map(gt_sft.streamlines,
-                                               dimensions).astype(np.int16)
-        gt_inv_mask = np.zeros(dimensions, dtype=np.int16)
-        gt_inv_mask[gt_mask == 0] = 1
-        gt_mask[gt_mask > 0] = 1
-        gt_bundle_masks.append(gt_mask)
-        gt_bundle_inv_masks.append(gt_inv_mask)
-
-    return gt_bundle_masks, gt_bundle_inv_masks, affine, dimensions
-
-
-def split_heads_tails_kmeans(data):
-    """
-    Split a mask between head and tail with k means
-
-    Parameters
-    ----------
-    data: numpy.ndarray
-        Mask to be split.
-
-    Returns
-    -------
-    mask_1: numpy.ndarray
-        "Head" of the mask.
-    mask_2: numpy.ndarray
-        "Tail" of the mask.
-    """
-
-    X = np.argwhere(data)
-    k_means = KMeans(n_clusters=2).fit(X)
-    mask_1 = np.zeros(data.shape)
-    mask_2 = np.zeros(data.shape)
-
-    mask_1[tuple(X[np.where(k_means.labels_ == 0)].T)] = 1
-    mask_2[tuple(X[np.where(k_means.labels_ == 1)].T)] = 1
-
-    return mask_1, mask_2
-
-
-def extract_tails_heads_from_endpoints(gt_endpoints, out_dir):
-    """
-    Extract two masks from a single mask containing two regions.
-
-    Parameters
-    ----------
-    gt_endpoints: list of str
-        List of ground-truth mask filenames.
-
-    Returns
-    -------
-    tails: list
-        List of tail filenames.
-    heads: list
-        List of head filenames.
-    affine: numpy.ndarray
-        Affine of mask image.
-    dimensions: tuple of int
-        Dimensions of the mask image.
-    """
-
-    tails = []
-    heads = []
-    for mask_filename in gt_endpoints:
-        mask_img = nib.load(mask_filename)
-        mask = get_data_as_mask(mask_img)
-        affine = mask_img.affine
-        dimensions = mask.shape
-
-        head, tail = split_heads_tails_kmeans(mask)
-
-        basename = os.path.basename(
-            split_name_with_nii(mask_filename)[0])
-        tail_filename = os.path.join(
-            out_dir, '{}_tail.nii.gz'.format(basename))
-        head_filename = os.path.join(
-            out_dir, '{}_head.nii.gz'.format(basename))
-        nib.save(nib.Nifti1Image(head.astype(
-            mask.dtype), affine), head_filename)
-        nib.save(nib.Nifti1Image(tail.astype(
-            mask.dtype), affine), tail_filename)
-
-        tails.append(tail_filename)
-        heads.append(head_filename)
-
-    return tails, heads, affine, dimensions
-
-
-def extract_true_connections(
-    sft, mask_1_filename, mask_2_filename, gt_config, length_dict,
-    gt_bundle, gt_bundle_inv_mask, dilate_endpoints, wrong_path_as_separate
-):
-    """
-    Extract true connections based on two regions from a tractogram.
-    May extract false and no connections if the config is passed.
-
-    Parameters
-    ----------
-    sft: StatefulTractogram
-        Tractogram containing the streamlines to be extracted.
-    mask_1_filename: str
-        Filename of the "head" of the bundle.
-    mask_2_filename: str
-        Filename of the "tail" of the bundle.
-    gt_config: dict or None
-        Dictionary containing the bundle's parameters.
-    length_dict: dict or None
-        Dictionary containing the bundle's length parameters.
-    gt_bundle: str
-        Bundle's name.
-    gt_bundle_inv_mask: np.ndarray
-        Inverse mask of the bundle.
-    dilate_endpoints: int or None
-        If set, dilate the masks for n iterations.
-    wrong_path_as_separate: bool
-        If true, save the WPCs as separate from TCs.
-
-    Returns
-    -------
-    tc_sft: StatefulTractogram
-        SFT of true connections.
-    wpc_sft: StatefulTractogram
-        SFT of wrong-path-connections.
-    fc_sft: StatefulTractogram
-        SFT of false connections (streamlines that are too long).
-    nc_streamlines: StatefulTractogram
-        SFT of no connections (streamlines that loop)
-    sft: StatefulTractogram
-        SFT of remaining streamlines.
-    """
-
-    mask_1_img = nib.load(mask_1_filename)
-    mask_2_img = nib.load(mask_2_filename)
-    mask_1 = get_data_as_mask(mask_1_img)
-    mask_2 = get_data_as_mask(mask_2_img)
-
-    if dilate_endpoints:
-        mask_1 = binary_dilation(mask_1, iterations=dilate_endpoints)
-        mask_2 = binary_dilation(mask_2, iterations=dilate_endpoints)
-
-    # TODO: Handle streamline IDs instead of streamlines
-    tmp_sft, sft = extract_streamlines(mask_1, mask_2, sft)
-
-    streamlines = tmp_sft.streamlines
-    tc_streamlines = streamlines
-    wpc_streamlines = []
-    fc_streamlines = []
-    nc_streamlines = []
-
-    # Config file for each 'bundle'
-    # Loops => no connection (nc) # TODO Is this legit ?
-    # Length => false connection (fc) # TODO Is this legit ?
-    if gt_config:
-        min_len, max_len = \
-            length_dict[gt_bundle]['length']
-
-        # Bring streamlines to world coordinates so proper length
-        # is calculated
-        tmp_sft.to_rasmm()
-        streamlines = tmp_sft.streamlines
-        lengths = np.array(list(length(streamlines)))
-        tmp_sft.to_vox()
-        streamlines = tmp_sft.streamlines
-
-        valid_min_length_mask = lengths > min_len
-        valid_max_length_mask = lengths < max_len
-        valid_length_mask = np.logical_and(valid_min_length_mask,
-                                           valid_max_length_mask)
-        streamlines = ArraySequence(streamlines)
-
-        val_len_streamlines = streamlines[valid_length_mask]
-        fc_streamlines = streamlines[~valid_length_mask]
-
-        angle = length_dict[gt_bundle]['angle']
-        tc_streamlines_ids = remove_loops_and_sharp_turns(
-            val_len_streamlines, angle)
-
-        loop_ids = np.setdiff1d(
-            range(len(val_len_streamlines)), tc_streamlines_ids)
-
-        loops = val_len_streamlines[list(loop_ids)]
-        tc_streamlines = val_len_streamlines[list(tc_streamlines_ids)]
-
-        if loops:
-            nc_streamlines = loops
-
-    # Streamlines getting out of the bundle mask can be considered
-    # separately as wrong path connection (wpc)
-    # TODO: Maybe only consider if they cross another GT bundle ?
-    if wrong_path_as_separate:
-        tmp_sft = StatefulTractogram.from_sft(tc_streamlines, sft)
-        _, wp_ids = filter_grid_roi(
-            tmp_sft, gt_bundle_inv_mask, 'any', False)
-        wpc_streamlines = tmp_sft.streamlines[list(wp_ids)]
-        tc_ids = np.setdiff1d(range(len(tmp_sft)), wp_ids)
-        tc_streamlines = tmp_sft.streamlines[list(tc_ids)]
-
-    tc_sft = StatefulTractogram.from_sft(tc_streamlines, sft)
-    wpc_sft = StatefulTractogram.from_sft([], sft)
-    fc_sft = StatefulTractogram.from_sft(fc_streamlines, sft)
-    if wrong_path_as_separate and len(wpc_streamlines):
-        wpc_sft = StatefulTractogram.from_sft(wpc_streamlines, sft)
-
-    return tc_sft, wpc_sft, fc_sft, nc_streamlines, sft
-
-
-def extract_false_connections(sft, mask_1_filename, mask_2_filename,
-                              dilate_endpoints):
-    """
-    Extract false connections based on two regions from a tractogram.
-
-    Parameters
-    ----------
-    sft: StatefulTractogram
-        Tractogram containing the streamlines to be extracted.
-    mask_1_filename: str
-        Filename of the "head" of the bundle.
-    mask_2_filename: str
-        Filename of the "tail" of the bundle.
-    dilate_endpoints: int or None
-        If set, dilate the masks for n iterations.
-
-    Returns
-    -------
-    fc_sft: StatefulTractogram
-        SFT of false connections.
-    sft: StatefulTractogram
-        SFT of remaining streamlines.
-    """
-
-    mask_1_img = nib.load(mask_1_filename)
-    mask_2_img = nib.load(mask_2_filename)
-    mask_1 = get_data_as_mask(mask_1_img)
-    mask_2 = get_data_as_mask(mask_2_img)
-
-    if dilate_endpoints:
-        mask_1 = binary_dilation(mask_1, iterations=dilate_endpoints)
-        mask_2 = binary_dilation(mask_2, iterations=dilate_endpoints)
-
-    if len(sft.streamlines) > 0:
-        tmp_sft, sft = extract_streamlines(mask_1, mask_2, sft)
-
-        streamlines = tmp_sft.streamlines
-        fc_streamlines = streamlines
-
-        fc_sft = StatefulTractogram.from_sft(fc_streamlines, sft)
-        return fc_sft, sft
+    if wpc_sft_list is not None:
+        wpc_per_bundle = [len(x) if x is not None else 0 for x in wpc_sft_list]
+        wpb_count = np.count_nonzero(wpc_per_bundle)
+        wpc_count = np.sum(wpc_per_bundle)
     else:
-        return sft, sft
+        wpb_count = 0
+        wpc_count = 0
+
+    ic_per_ib_bundle = [len(x) for x in ib_sft_list]
+    ib_count = np.count_nonzero(ic_per_ib_bundle)
+    ic_count = np.sum(ic_per_ib_bundle)
+
+    nc_count = len(nc_sft) if nc_sft is not None else 0
+    total_count = vs_count + wpc_count + ic_count + nc_count
+
+    nb_bundles = len(bundles_names)
+
+    final_results = {
+        "total_streamlines": int(total_count),
+        "VB": int(vb_count),
+        "VS": int(vs_count),
+        "VS_ratio": vs_count / total_count,
+        "IS": int(ic_count + nc_count),  # ic_count = 0 if not args.compute_ic
+        "IS_ratio": (ic_count + nc_count) / total_count,
+    }
+
+    if args.compute_ic:
+        final_results.update({
+            "IB": int(ib_count),
+            "IC": int(ic_count),
+            "IC_ratio": ic_count / total_count,
+            "NC": int(nc_count),
+            "NC_ratio": nc_count / total_count})
+
+    if args.save_wpc_separately:
+        final_results.update({
+            "WPC": int(wpc_count),
+            "WPC_bundle": wpb_count,
+            "WPC_ratio": wpc_count / total_count})
+
+    # Tractometry stats over volume: OL, OR, Dice score
+    mean_overlap = 0.0
+    mean_overreach_gt = 0.0
+    mean_overreach_vs = 0.0
+    mean_f1 = 0.0
+    nb_bundles_in_stats = 0
+
+    bundle_wise_dict = {}
+    for i in range(nb_bundles):
+        logging.debug("Scoring bundle {}".format({bundles_names[i]}))
+
+        current_vb = vb_sft_list[i]
+        bundle_results = {"VS": len(current_vb)}
+
+        if gt_masks[i] is not None:
+            if current_vb is None or len(current_vb) == 0:
+                logging.debug("   Empty bundle or bundle not found.")
+                bundle_results.update({
+                    "TP": 0, "FP": 0, "FN": 0,
+                    "OL": 0, "OR_pct_gt": 0, "OR_pct_vs": 0, "f1": 0,
+                    "endpoints_OL": 0, "endpoints_OR": 0
+                })
+                nb_bundles_in_stats += 1
+                bundle_wise_dict.update({bundles_names[i]: bundle_results})
+                continue
+
+            # Getting the recovered mask
+            current_vb_voxels, current_vb_endpoints_voxels = get_binary_maps(
+                current_vb)
+
+            (f1, tp_nb_voxels, fp_nb_voxels, fn_nb_voxels,
+             overlap_count, overreach_pct_gt, overreach_pct_vs) = \
+                compute_f1_overlap_overreach(
+                    current_vb_voxels, gt_masks[i], dimensions)
+
+            # Endpoints coverage
+            # todo. What is this? Useful?
+            endpoints_overlap = gt_masks[i] * current_vb_endpoints_voxels
+            endpoints_overreach = np.zeros(dimensions)
+            endpoints_overreach[np.where(
+                (gt_masks[i] == 0) & (current_vb_endpoints_voxels >= 1))] = 1
+
+            bundle_results.update({
+                "TP": tp_nb_voxels,
+                "FP": fp_nb_voxels,
+                "FN": fn_nb_voxels,
+                "OL": overlap_count,
+                "OR_pct_vs": overreach_pct_vs,
+                "OR_pct_gt": overreach_pct_gt,
+                "f1": f1,
+                "endpoints_OL": np.count_nonzero(endpoints_overlap),
+                "endpoints_OR": np.count_nonzero(endpoints_overreach)
+            })
+
+            # WPC
+            if args.save_wpc_separately:
+                wpc_sft = wpc_sft_list[i]
+                if wpc_sft is not None and len(wpc_sft) > 0:
+                    current_wpc_voxels, _ = get_binary_maps(wpc_sft)
+
+                    # We could add an option to include wpc streamlines to the
+                    # overreach count. But it seems more natural to exclude wpc
+                    # streamlines from any count. Separating into a different
+                    # statistic dict. Else, user may simply not include a "ALL"
+                    # mask, there won't be any wpc.
+                    (_, tp_nb_voxels, fp_nb_voxels, _, overlap_count,
+                     overreach_pct_gt, overreach_pct_vs) = \
+                        compute_f1_overlap_overreach(
+                            current_vb_voxels, gt_masks[i], dimensions)
+
+                    wpc_results = {
+                        "Count": len(wpc_sft),
+                        "TP": tp_nb_voxels,
+                        "FP": fp_nb_voxels,
+                        "OL": overlap_count,
+                        "OR_pct_vs": overreach_pct_vs,
+                        "OR_pct_gt": overreach_pct_gt,
+                    }
+                    bundle_results.update({"WPC": wpc_results})
+                else:
+                    bundle_results.update({"WPC": None})
+
+            mean_overlap += bundle_results["OL"]
+            mean_overreach_gt += bundle_results["OR_pct_gt"]
+            mean_overreach_vs += bundle_results["OR_pct_vs"]
+            mean_f1 += bundle_results["f1"]
+            nb_bundles_in_stats += 1
+        else:
+            bundle_results.update({"Scoring skipped": "No gt_mask provided"})
+
+        bundle_wise_dict.update({bundles_names[i]: bundle_results})
+
+    if args.compute_ic:
+        # -----------
+        # False connections stats: number of voxels
+        # -----------
+        ic_results = {}
+        for i in range(len(ib_names)):
+            current_ib = ib_sft_list[i]
+            if len(current_ib) > 0:
+                current_ib_voxels, _ = get_binary_maps(current_ib)
+
+                bundle_results = {
+                    "IC": len(current_ib),
+                    "nb_voxels": np.count_nonzero(current_ib_voxels)
+                }
+                ic_results.update({ib_names[i]: bundle_results})
+
+        bundle_wise_dict.update({"IB": ic_results})
+
+    final_results.update({"bundle_wise": bundle_wise_dict})
+
+    if nb_bundles_in_stats > 0:
+        final_results.update({
+            "mean_OL": mean_overlap / nb_bundles_in_stats,
+            "mean_OR_gt": mean_overreach_gt / nb_bundles_in_stats,
+            "mean_OR_vs": mean_overreach_vs / nb_bundles_in_stats,
+            "mean_f1": mean_f1 / nb_bundles_in_stats
+        })
+
+    return final_results

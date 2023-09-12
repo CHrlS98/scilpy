@@ -53,7 +53,8 @@ import nibabel as nib
 import numpy as np
 import scipy.ndimage as ndi
 
-from scilpy.io.image import get_data_as_label, get_data_as_mask
+from scilpy.image.labels import get_data_as_labels
+from scilpy.io.image import get_data_as_mask
 from scilpy.io.streamlines import reconstruct_streamlines_from_hdf5
 from scilpy.io.utils import (add_overwrite_arg, add_processes_arg,
                              add_verbose_arg,
@@ -164,13 +165,10 @@ def _processing_wrapper(args):
 
                 metric_data = metric_img.get_fdata(dtype=np.float64)
                 if weighted:
-                    density = density / np.max(density)
-                    voxels_value = metric_data * density
-                    voxels_value = voxels_value[voxels_value > 0]
+                    avg_value = np.average(metric_data, weights=density)
                 else:
-                    voxels_value = metric_data[density > 0]
-
-                measures_to_return[metric_filename] = np.average(voxels_value)
+                    avg_value = np.average(metric_data[density > 0])
+                measures_to_return[metric_filename] = avg_value
             # lesion
             else:
                 lesion_filename = measure[0][0]
@@ -183,7 +181,7 @@ def _processing_wrapper(args):
 
                 voxel_sizes = lesion_img.header.get_zooms()[0:3]
                 lesion_img.set_filename('tmp.nii.gz')
-                lesion_atlas = get_data_as_label(lesion_img)
+                lesion_atlas = get_data_as_labels(lesion_img)
                 tmp_dict = compute_lesion_stats(
                     density.astype(bool), lesion_atlas,
                     voxel_sizes=voxel_sizes, single_label=True,
@@ -284,10 +282,8 @@ def main():
     assert_inputs_exist(parser, [args.in_hdf5, args.in_labels],
                         args.force_labels_list)
 
-    log_level = logging.WARNING
-    if args.verbose:
-        log_level = logging.INFO
-    logging.basicConfig(level=log_level)
+    log_level = logging.INFO if args.verbose else logging.WARNING
+    logging.getLogger().setLevel(log_level)
     coloredlogs.install(level=log_level)
 
     measures_to_compute = []
@@ -358,7 +354,7 @@ def main():
         logging.info('data_per_streamline weighting is activated.')
 
     img_labels = nib.load(args.in_labels)
-    data_labels = get_data_as_label(img_labels)
+    data_labels = get_data_as_labels(img_labels)
     if not args.force_labels_list:
         labels_list = np.unique(data_labels)[1:].tolist()
     else:
