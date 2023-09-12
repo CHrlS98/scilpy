@@ -30,7 +30,7 @@ def _classify_two_directions(peaks, cos_tol, nufid, labels):
 
 def _classify_four_directions(peaks, cos_tol, nufid, labels):
     #  identify two-direction voxels (straight and bending)
-    idx,idy, idz = np.nonzero(nufid == 4)
+    idx, idy, idz = np.nonzero(nufid == 4)
     for ind in zip(idx, idy, idz):
         p = peaks[ind][:4]
         sym = True
