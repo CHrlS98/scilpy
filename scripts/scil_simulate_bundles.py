@@ -6,6 +6,7 @@ import copy
 import json
 import numpy as np
 import nibabel as nib
+from nibabel.streamlines import ArraySequence
 from scipy.interpolate import splprep, splev
 from dipy.io.stateful_tractogram import StatefulTractogram, Space, Origin
 from dipy.io.streamline import save_tractogram
@@ -116,7 +117,7 @@ def vonMisesFisher(x, mu, kappa, lmax_norm=False):
 
 def generate_streamlines(config_dict, volume_size):
     streamlines = []
-    for bundle in config_dict['bundles']:
+    for _, bundle in config_dict['bundles'].items():
         centroid = np.array(bundle['centroids']).astype(float)
         up = np.array(bundle['up_vectors']).astype(float)
 
@@ -146,7 +147,7 @@ def generate_streamlines(config_dict, volume_size):
             tck, _ = splprep(points.T, s=0)
             x_approx = np.array(
                 splev(np.linspace(0, 1, bundle['n_steps']), tck)).T
-            streamlines.append(x_approx)
+            streamlines.append(x_approx.astype(np.float32))
 
     # transform streamlines to voxel space
     streamlines = transform_streamlines_to_vox(streamlines, volume_size)
@@ -157,7 +158,7 @@ def generate_streamlines(config_dict, volume_size):
     endpoints = np.zeros(volume_size, dtype=bool)
     endpoints[unique[:, 0], unique[:, 1], unique[:, 2]] = True
 
-    return streamlines, endpoints
+    return ArraySequence(streamlines), endpoints
 
 
 def generate_fiber_odf(streamlines, volume_size, fiber_decay,
