@@ -43,6 +43,11 @@ def _build_arg_parser():
 
     add_reference_arg(p)
 
+    p.add_argument('--commit_weights',
+                   help='Optional COMMIT weights for scaling streamlines\n'
+                        'by their contribution to the diffusion signal.')
+
+
     p.add_argument('--sphere', default='repulsion724',
                    help='sphere used for the angular discretization. '
                         '[%(default)s]')
@@ -97,7 +102,7 @@ def main():
     logging.getLogger().setLevel(logging.INFO)
 
     assert_inputs_exist(parser, args.in_tractogram,
-                        [args.mask, args.reference])
+                        [args.mask, args.reference, args.commit_weights])
 
     output_file_list = []
     if args.out_mask:
@@ -132,10 +137,16 @@ def main():
     # case).
     sft.to_corner()
 
+    commit_weights = None
+    if args.commit_weights:
+        commit_weights = np.loadtxt(args.commit_weights)
+
     logging.info('Computing length-weighted TODI ...')
     todi_obj = TrackOrientationDensityImaging(tuple(data_shape), args.sphere)
     todi_obj.compute_todi(sft.streamlines, length_weights=True,
-                          n_steps=args.n_steps, asymmetric=args.asymmetric)
+                          commit_weights=commit_weights,
+                          n_steps=args.n_steps,
+                          asymmetric=args.asymmetric)
 
     if args.smooth_todi:
         logging.info('Smoothing ...')

@@ -20,7 +20,7 @@ def _subdivide_streamline(streamline, n_steps):
     return subdivided
 
 
-def streamlines_to_segments(streamlines, n_steps=1):
+def streamlines_to_segments(streamlines, commit_weights=None, n_steps=1):
     """Split streamlines into its segments.
 
     Parameters
@@ -35,13 +35,23 @@ def streamlines_to_segments(streamlines, n_steps=1):
     """
     vts_0_list = []
     vts_1_list = []
-    for streamline in streamlines:
-        streamline = _subdivide_streamline(streamline, n_steps)
-        vts_0_list.append(streamline[:-1])
-        vts_1_list.append(streamline[1:])
+    contrib_list = []
+    for it, streamline in enumerate(streamlines):
+        if commit_weights is not None:
+            c_weight = commit_weights[it]
+        else:
+            c_weight = 1.0
+        if c_weight > 0.0:
+            streamline = _subdivide_streamline(streamline, n_steps)
+            # there is one less segment than there are pts
+            contrib_list.extend(np.repeat(commit_weights[it],
+                                          len(streamline) - 1)
+                                .tolist())
+            vts_0_list.append(streamline[:-1])
+            vts_1_list.append(streamline[1:])
 
     segments = np.stack((np.vstack(vts_0_list), np.vstack(vts_1_list)), axis=0)
-    return segments
+    return segments, np.asarray(contrib_list).reshape((-1,))
 
 
 def streamlines_to_endpoints(streamlines):
@@ -65,7 +75,8 @@ def streamlines_to_endpoints(streamlines):
     return endpoints
 
 
-def streamlines_to_pts_dir_norm(streamlines, n_steps=1, asymmetric=False):
+def streamlines_to_pts_dir_norm(streamlines, commit_weights=None,
+                                n_steps=1, asymmetric=False):
     """Evaluate each segment: mid position, direction, length.
 
     Parameters
@@ -82,7 +93,8 @@ def streamlines_to_pts_dir_norm(streamlines, n_steps=1, asymmetric=False):
     seg_norm : numpy.ndarray (2D)
         Length of all streamlines' segments.
     """
-    segments = streamlines_to_segments(streamlines, n_steps)
+    segments, seg_weights =\
+        streamlines_to_segments(streamlines, commit_weights, n_steps)
     seg_mid = get_segments_mid_pts_positions(segments)
     seg_dir, seg_norm = get_segments_dir_and_norm(segments,
                                                   seg_mid,
@@ -93,7 +105,7 @@ def streamlines_to_pts_dir_norm(streamlines, n_steps=1, asymmetric=False):
         logging.warning("WARNING : There is at least one streamline with "
                         "overlapping points in the tractogram.")
 
-    return seg_mid[mask], seg_dir[mask], seg_norm[mask]
+    return seg_mid[mask], seg_dir[mask], seg_norm[mask], seg_weights[mask]
 
 
 def get_segments_mid_pts_positions(segments):

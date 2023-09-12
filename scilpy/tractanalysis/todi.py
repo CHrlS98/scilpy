@@ -53,7 +53,7 @@ class TrackOrientationDensityImaging(object):
         self.todi = todi
 
     def compute_todi(self, streamlines, length_weights=True,
-                     n_steps=1, asymmetric=False):
+                     commit_weights=None, n_steps=1, asymmetric=False):
         """Compute the TODI map.
 
         At each voxel an histogram distribution of
@@ -67,13 +67,15 @@ class TrackOrientationDensityImaging(object):
             Weights TODI map of each segment's length (default True).
         """
         # Streamlines vertices in "VOXEL_SPACE" within "img_shape" range
-        pts_pos, pts_dir, pts_norm = \
+        pts_pos, pts_dir, pts_norm, pts_weight = \
             todi_u.streamlines_to_pts_dir_norm(streamlines,
+                                               commit_weights=commit_weights,
                                                n_steps=n_steps,
                                                asymmetric=asymmetric)
 
-        if not length_weights:
-            pts_norm = None
+        if length_weights:
+            pts_weight *= pts_norm
+            print(pts_weight.shape)
 
         sph_ids = todi_u.get_dir_to_sphere_id(pts_dir, self.sphere.vertices)
 
@@ -96,7 +98,7 @@ class TrackOrientationDensityImaging(object):
         # Count number of direction for each voxel containing streamlines
         todi_bin_1d = np.bincount(
             np.ravel_multi_index(np.stack((pts_vox, sph_ids)), todi_bin_shape),
-            weights=pts_norm, minlength=todi_bin_len)
+            weights=pts_weight, minlength=todi_bin_len)
 
         # Bincount of sphere id for each voxel
         self.todi = todi_bin_1d.reshape(todi_bin_shape)
