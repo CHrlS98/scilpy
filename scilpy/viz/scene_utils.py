@@ -180,43 +180,26 @@ def create_odf_slicer(sh_fodf, orientation, slice_index, mask, sphere,
                             full_basis, return_inv=False)
 
     var_actor = None
-
+    odf_actor = actor.odf_slicer(sh_fodf, mask=mask, norm=norm,
+                                 radial_scale=radial_scale,
+                                 sphere=sphere,
+                                 colormap=colormap,
+                                 scale=scale, B_matrix=B_mat)
     if sh_variance is not None:
-        fodf = sh_to_sf(sh_fodf, sphere, sh_order, sh_basis,
-                        full_basis=full_basis)
-        fodf_var = sh_to_sf(sh_variance, sphere, sh_order, sh_basis,
-                            full_basis=full_basis)
-        fodf_uncertainty = fodf + variance_k * np.sqrt(np.clip(fodf_var, 0,
-                                                               None))
-        # normalise fodf and variance
-        if norm:
-            maximums = np.abs(np.append(fodf, fodf_uncertainty, axis=-1))\
-                .max(axis=-1)
-            fodf[maximums > 0] /= maximums[maximums > 0][..., None]
-            fodf_uncertainty[maximums > 0] /= maximums[maximums > 0][..., None]
-
-        odf_actor = actor.odf_slicer(fodf, mask=mask, norm=False,
+        var_actor = actor.odf_slicer(sh_variance, mask=mask, norm=norm,
                                      radial_scale=radial_scale,
                                      sphere=sphere, scale=scale,
-                                     colormap=colormap)
-
-        var_actor = actor.odf_slicer(fodf_uncertainty, mask=mask, norm=False,
-                                     radial_scale=radial_scale,
-                                     sphere=sphere, scale=scale,
-                                     colormap=variance_color)
+                                     colormap=variance_color,
+                                     B_matrix=B_mat)
         var_actor.GetProperty().SetDiffuse(0.0)
         var_actor.GetProperty().SetAmbient(1.0)
         var_actor.GetProperty().SetFrontfaceCulling(True)
-    else:
-        odf_actor = actor.odf_slicer(sh_fodf, mask=mask, norm=norm,
-                                     radial_scale=radial_scale,
-                                     sphere=sphere,
-                                     colormap=colormap,
-                                     scale=scale, B_matrix=B_mat)
+
+    # set slice of interest
     set_display_extent(odf_actor, orientation, sh_fodf.shape[:3], slice_index)
     if var_actor is not None:
         set_display_extent(var_actor, orientation,
-                           fodf_uncertainty.shape[:3], slice_index)
+                           sh_variance.shape[:3], slice_index)
 
     return odf_actor, var_actor
 
