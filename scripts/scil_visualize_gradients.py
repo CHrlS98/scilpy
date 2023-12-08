@@ -70,6 +70,9 @@ def _build_arg_parser():
     g2.add_argument(
         '--opacity', type=float, default=1.0,
         help='Opacity for the shells.')
+    g2.add_argument(
+        '--scale_bvecs', action='store_true',
+        help="Scale b-vecs by bvalue.")
 
     add_overwrite_arg(p)
     add_verbose_arg(p)
@@ -79,6 +82,7 @@ def _build_arg_parser():
 def main():
     parser = _build_arg_parser()
     args = parser.parse_args()
+    logging.getLogger().setLevel(logging.WARN)
     if args.verbose:
         logging.getLogger().setLevel(logging.INFO)
 
@@ -133,6 +137,13 @@ def main():
             points = tmp[:, :3]
             bvals = tmp[:, 3]
             centroids, shell_idx = identify_shells(bvals)
+
+        if args.scale_bvecs:
+            scaling = bvals / bvals.max()
+            points = points * scaling[:, None]
+            if args.enable_sph and args.opacity == 1.0:
+                logging.warn("b-vecs are scaled but rendered sphere is " +
+                            "opaque. Only highest shell will be visible.")
 
         if args.verbose:
             logging.info("Found {} centroids: {}".format(
