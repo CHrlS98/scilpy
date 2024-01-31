@@ -16,6 +16,7 @@ import numpy as np
 from numpy.lib import stride_tricks
 from scipy.ndimage import (binary_closing, binary_dilation,
                            binary_erosion, binary_opening,
+                           gaussian_gradient_magnitude,
                            gaussian_filter)
 from skimage.filters import threshold_otsu
 
@@ -68,7 +69,8 @@ def get_image_ops():
         ('erosion', erosion),
         ('closing', closing),
         ('opening', opening),
-        ('blur', gaussian_blur)
+        ('blur', gaussian_blur),
+        ('gradient_magnitude', gradient_magnitude)
     ]))
     return image_ops
 
@@ -766,3 +768,20 @@ def gaussian_blur(input_list, ref_img):
 
     return gaussian_filter(input_list[0].get_fdata(dtype=np.float64),
                            sigma=input_list[1])
+
+
+def gradient_magnitude(input_list, ref_img):
+    """
+    gradient_magnitude: IMG, SIGMA
+        Compute gradient magnitude of image using gradient
+        of gaussian with standard deviation SIGMA.
+    """
+    _validate_length(input_list, 2)
+    _validate_type(input_list[0], nib.Nifti1Image)
+    _validate_float(input_list[1])
+
+    out = gaussian_gradient_magnitude(
+        input_list[0].get_fdata(dtype=np.float64),
+        sigma=input_list[1])
+
+    return out
