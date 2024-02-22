@@ -108,7 +108,8 @@ def crop_volume(img: nib.Nifti1Image, wbbox):
 
 
 def apply_transform(transfo, reference, moving,
-                    interp='linear', keep_dtype=False):
+                    interp='linear', keep_dtype=False,
+                    rotate_vec=False):
     """
     Apply transformation to an image using Dipy's tool
 
@@ -141,8 +142,8 @@ def apply_transform(transfo, reference, moving,
         moving_data = moving.get_fdata(dtype=np.float32)
     moving_affine = moving.affine
 
+    orig_type = moving_data.dtype
     if moving_data.ndim == 3:
-        orig_type = moving_data.dtype
         affine_map = AffineMap(np.linalg.inv(transfo),
                                dim, grid2world,
                                moving_data.shape, moving_affine)
@@ -152,13 +153,28 @@ def apply_transform(transfo, reference, moving,
         if isinstance(moving_data[0, 0, 0], np.void):
             raise ValueError('Does not support TrackVis RGB')
 
+        if rotate_vec and moving_data.shape[-1] != 3:
+            print(moving_data.shape)
+            raise ValueError("Moving image does not contain 3D vectors.")
+
         affine_map = AffineMap(np.linalg.inv(transfo),
                                dim[0:3], grid2world,
                                moving_data.shape[0:3], moving_affine)
 
-        orig_type = moving_data.dtype
         resampled = transform_dwi(affine_map, static_data, moving_data,
                                   interpolation=interp)
+        if rotate_vec:
+            resampled_norm = np.linalg.norm(resampled, axis=-1)
+            resampled_dir = np.zeros_like(resampled)
+            resampled_dir[resampled_norm > 0] = resampled[resampled_norm > 0]\
+                / resampled_norm[resampled_norm > 0][..., None]
+            resampled_dir = resampled_dir.dot(np.linalg.inv(transfo[:3, :3]))
+
+            out_norm = np.linalg.norm(resampled_dir, axis=-1)
+
+            resampled[out_norm > 0] = resampled_dir[out_norm > 0]\
+                / out_norm[out_norm > 0][..., None]
+            resampled *= resampled_norm[..., None]
     else:
         raise ValueError('Does not support this dataset (shape, type, etc)')
 
