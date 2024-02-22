@@ -127,6 +127,10 @@ def apply_transform(transfo, reference, moving,
     keep_dtype : bool
         If True, keeps the data_type of the input moving image when saving
         the output image
+    rotate_vec: bool
+        If True, last dimension is assumed to contain 3D vectors onto which
+        the transformation matrix should be applied. Only the rotation is
+        applied and scaling and translation will remain unchanged.
 
     Return
     ------
@@ -154,7 +158,6 @@ def apply_transform(transfo, reference, moving,
             raise ValueError('Does not support TrackVis RGB')
 
         if rotate_vec and moving_data.shape[-1] != 3:
-            print(moving_data.shape)
             raise ValueError("Moving image does not contain 3D vectors.")
 
         affine_map = AffineMap(np.linalg.inv(transfo),

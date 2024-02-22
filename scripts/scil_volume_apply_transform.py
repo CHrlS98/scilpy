@@ -40,8 +40,11 @@ def _build_arg_parser():
                    help='Apply the inverse transformation.')
     p.add_argument('--keep_dtype', action='store_true',
                    help='If True, keeps the data_type of the input image '
-                        '(in_file) when saving the output image (out_name).')
-    p.add_argument('--last_dim_is_vecs', action='store_true')
+                        '(in_file)\nwhen saving the output image (out_name).')
+    p.add_argument('--rotate_last_dim', action='store_true',
+                   help='When enabled, the provided transform will be used '
+                        'to rotate\nthe vectors stored in the last dimension '
+                        'of the input image.')
 
     add_verbose_arg(p)
     add_overwrite_arg(p)
@@ -71,21 +74,20 @@ def main():
 
     # Load images and validate input type.
     moving = nib.load(args.in_file)
-    if args.last_dim_is_vecs:
+    if args.rotate_last_dim:
         if moving.get_fdata().ndim != 4 and moving.shape[-1] != 3:
-            parser.error('Invalid input shape for option --last_dim_is_vecs.')
-
-    if moving.get_fdata().ndim == 4 and not args.last_dim_is_vecs:
-        warnings.warn('You are applying a transform to a 4D dwi volume, '
-                      'make sure to rotate your bvecs with '
-                      'scil_gradients_apply_transform.py')
+            parser.error('Invalid input shape for option --rotate_last_dim.')
+    else:
+        if moving.get_fdata().ndim == 4:
+            warnings.warn('You are applying a transform to a 4D dwi '
+                          'volume. Make sure to rotate your bvecs with '
+                          'scil_gradients_apply_transform.py.')
 
     reference = nib.load(args.in_target_file)
 
-    warped_img = apply_transform(
-        transfo, reference, moving,
-        keep_dtype=args.keep_dtype,
-        rotate_vec=args.last_dim_is_vecs)
+    warped_img = apply_transform(transfo, reference, moving,
+                                 keep_dtype=args.keep_dtype,
+                                 rotate_vec=args.rotate_last_dim)
 
     nib.save(warped_img, args.out_name)
 
