@@ -56,6 +56,9 @@ def _build_arg_parser():
     p.add_argument('--todi_sigma', choices=[0, 1, 2, 3, 4],
                    default=1, type=int,
                    help='Smooth the orientation histogram.')
+    p.add_argument('--sub_mask',
+                   help='Mask further constraining the region where 3D \n'
+                        'priors are estimated and applied.')
     p.add_argument('--sf_threshold', default=0.2, type=float,
                    help='Relative threshold for sf masking (0.0-1.0).')
     p.add_argument('--out_prefix', default='',
@@ -84,7 +87,7 @@ def main():
 
     # Checks
     required = [args.in_bundle, args.in_fodf, args.in_mask]
-    assert_inputs_exist(parser, required, args.reference)
+    assert_inputs_exist(parser, required, [args.reference, args.sub_mask])
     assert_headers_compatible(parser, required, reference=args.reference)
 
     out_efod = os.path.join(args.out_dir,
@@ -121,6 +124,8 @@ def main():
     # Compute TODI from streamlines
     todi_sf, sub_mask_3d = get_sf_from_todi(sft, mask_data, args.todi_sigma,
                                             args.sf_threshold)
+    if args.sub_mask is not None:
+        sub_mask_3d = get_data_as_mask(nib.load(args.sub_mask))
 
     # SF to SH
     # Memory friendly saving, as soon as possible saving then delete
