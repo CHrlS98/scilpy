@@ -61,12 +61,14 @@ from time import perf_counter
 import nibabel as nib
 import numpy as np
 from nibabel.streamlines import TrkFile, detect_format
+from dipy.io.stateful_tractogram import Space, Origin
 
 from dipy.data import get_sphere
 from dipy.tracking import utils as track_utils
 from dipy.tracking.local_tracking import LocalTracking
 from dipy.tracking.stopping_criterion import BinaryStoppingCriterion
 from scilpy.io.image import get_data_as_mask
+from scilpy.io.streamlines import load_tractogram
 from scilpy.io.utils import (add_sphere_arg, add_verbose_arg,
                              assert_headers_compatible, assert_inputs_exist,
                              assert_outputs_exist, parse_sh_basis_arg,
@@ -208,28 +210,58 @@ def main():
 
     voxel_size = odf_sh_img.header.get_zooms()[0]
     vox_step_size = args.step_size / voxel_size
-    seed_img = nib.load(args.in_seed)
 
     sh_basis, is_legacy = parse_sh_basis_arg(args)
 
-    if np.count_nonzero(seed_img.get_fdata(dtype=np.float32)) == 0:
-        raise IOError('The image {} is empty. '
-                      'It can\'t be loaded as '
-                      'seeding mask.'.format(args.in_seed))
+    forward_only = False
+    init_dirs = None
+    from_streamlines = False
 
     # Note. Seeds are in voxel world, center origin.
     # (See the examples in random_seeds_from_mask).
     logging.info("Preparing seeds.")
     if args.in_custom_seeds:
         seeds = np.squeeze(load_matrix_in_any_format(args.in_custom_seeds))
+        total_nb_seeds = len(seeds)
     else:
-        seeds = track_utils.random_seeds_from_mask(
-            seed_img.get_fdata(dtype=np.float32),
-            np.eye(4),
-            seeds_count=nb_seeds,
-            seed_count_per_voxel=seed_per_vox,
-            random_seed=args.seed)
-    total_nb_seeds = len(seeds)
+        if '.nii' in args.in_seed:
+            seed_img = nib.load(args.in_seed)
+            if np.count_nonzero(seed_img.get_fdata(dtype=np.float32)) == 0:
+                raise IOError('The image {} is empty. '
+                            'It can\'t be loaded as '
+                            'seeding mask.'.format(args.in_seed))
+            seeds = track_utils.random_seeds_from_mask(
+                seed_img.get_fdata(dtype=np.float32),
+                np.eye(4),
+                seeds_count=nb_seeds,
+                seed_count_per_voxel=seed_per_vox,
+                random_seed=args.seed)
+            total_nb_seeds = len(seeds)
+        elif '.trk' in args.in_seed:
+            from_streamlines = True
+            sft = load_tractogram(args.in_seed, 'same',
+                                  to_space=Space.VOX,
+                                  to_origin=Origin.NIFTI)
+            seeds_fwd = np.asarray([s[-2] for s in sft.streamlines],
+                                   dtype=np.float64)
+            seeds_bwd = np.asarray([s[1] for s in sft.streamlines],
+                                   dtype=np.float64)
+            seeds = np.empty((len(seeds_fwd)+len(seeds_bwd), 3),
+                             dtype=np.float64)
+            seeds[0::2] = seeds_fwd
+            seeds[1::2] = seeds_bwd
+
+            init_dirs_fwd = np.asarray([s[-1] - s[-2] for s in sft.streamlines],
+                                       dtype=np.float64)
+            init_dirs_bwd = np.asarray([s[0] - s[1] for s in sft.streamlines],
+                                       dtype=np.float64)
+            init_dirs = np.empty(seeds.shape, dtype=np.float64)
+            init_dirs[0::2] = init_dirs_fwd
+            init_dirs[1::2] = init_dirs_bwd
+            init_dirs = init_dirs.reshape((-1, 1, 3))
+
+            forward_only = True
+            total_nb_seeds = len(sft.streamlines)
 
     if not args.use_gpu:
         # LocalTracking.maxlen is actually the maximum length
@@ -237,21 +269,45 @@ def main():
         max_steps_per_direction = int(args.max_length / args.step_size)
 
         logging.info("Starting CPU local tracking.")
+
+        # Generator wrapper prepending the initial streamline
+        # to the reconstructed streamline
+        def generator_wrapper(strl_gen):
+            strl_iterator = iter(strl_gen)
+            for i in range(total_nb_seeds):
+                strl_and_seed_fwd = next(strl_iterator, None)
+                strl_and_seed_bwd = next(strl_iterator, None)
+                strl = sft.streamlines[i]
+                if strl_and_seed_fwd is not None:
+                    strl_fwd, seed = strl_and_seed_fwd
+                    strl = np.concatenate([strl, strl_fwd[1:]])
+                if strl_and_seed_bwd is not None:
+                    strl_bwd, seed = strl_and_seed_bwd
+                    strl = np.concatenate([strl_bwd[::-1], strl[1:]])
+                yield strl, seed
+
         streamlines_generator = LocalTracking(
-            get_direction_getter(
-                args.in_odf, args.algo, args.sphere,
-                args.sub_sphere, args.theta, sh_basis,
-                voxel_size, args.sf_threshold, args.sh_to_pmf,
-                args.probe_length, args.probe_radius,
-                args.probe_quality, args.probe_count,
-                args.support_exponent, is_legacy=is_legacy),
-            BinaryStoppingCriterion(mask_data),
-            seeds, np.eye(4),
-            step_size=vox_step_size, max_cross=1,
-            maxlen=max_steps_per_direction,
-            fixedstep=True, return_all=True,
-            random_seed=args.seed,
-            save_seeds=True)
+                get_direction_getter(
+                    args.in_odf, args.algo, args.sphere,
+                    args.sub_sphere, args.theta, sh_basis,
+                    voxel_size, args.sf_threshold, args.sh_to_pmf,
+                    args.probe_length, args.probe_radius,
+                    args.probe_quality, args.probe_count,
+                    args.support_exponent, is_legacy=is_legacy),
+                BinaryStoppingCriterion(mask_data),
+                seeds, np.eye(4),
+                step_size=vox_step_size, max_cross=1,
+                maxlen=max_steps_per_direction,
+                fixedstep=True, return_all=True,
+                unidirectional=forward_only,
+                initial_directions=init_dirs,
+                random_seed=args.seed,
+                save_seeds=True)
+
+        # when from streamlines, wrap generator to reconstruct the streamline
+        # from its segments
+        if from_streamlines:
+            streamlines_generator = generator_wrapper(streamlines_generator)
 
     else:  # GPU tracking
         # we'll make our streamlines twice as long,
