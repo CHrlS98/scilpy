@@ -321,9 +321,9 @@ def local_variance(input_list, ref_img):
     wfilter /= np.sum(wfilter)
     local_mean = convolve(data, wfilter)
     square_diff = (data - local_mean)**2
-    variance = convolve(square_diff, wfilter)
+    # variance = convolve(square_diff, wfilter)
 
-    return variance
+    return square_diff
 
 
 

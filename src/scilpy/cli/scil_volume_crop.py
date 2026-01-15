@@ -56,6 +56,9 @@ def _build_arg_parser():
     g1.add_argument('--input_bbox',
                     help='Path of the json file from which to take '
                          'the bounding box to crop input file.')
+    g1.add_argument('--from_voxels', nargs=6, type=int,
+                    metavar=('XMIN', 'XMAX', 'YMIN', 'YMAX', 'ZMIN', 'ZMAX'),
+                    help='Crop volume using min/max voxel indices for each axis.')
     g1.add_argument('--output_bbox',
                     help='Path of the json file where to write the '
                          'computed bounding box.')
@@ -74,21 +77,31 @@ def main():
     assert_outputs_exist(parser, args, args.out_image, args.output_bbox)
 
     img = nib.load(args.in_image)
-    if args.input_bbox:
-        wbbox = WorldBoundingBox.load(args.input_bbox,
-                                      args.use_deprecated_pickle)
-        if not args.ignore_voxel_size:
-            voxel_size = img.header.get_zooms()[0:3]
-            if not np.allclose(voxel_size, wbbox.voxel_size[0:3], atol=1e-03):
-                raise IOError("Bounding box and data voxel sizes are not "
-                              "compatible. Use option --ignore_voxel_size "
-                              "to ignore this test.")
+    if args.from_voxels:
+        xmin, xmax, ymin, ymax, zmin, zmax = args.from_voxels
+        if (xmin < 0 or xmax >= img.shape[0] or
+            ymin < 0 or ymax >= img.shape[1] or
+            zmin < 0 or zmax >= img.shape[2]):
+            parser.error('Invalid voxel coordinates for option --from_voxels.')
+        out_nifti_file = img.slicer[xmin:xmax, ymin:ymax, zmin:zmax]
     else:
-        wbbox = compute_nifti_bounding_box(img)
-        if args.output_bbox:
-            wbbox.dump(args.output_bbox, args.use_deprecated_pickle)
+        if args.input_bbox:
+            wbbox = WorldBoundingBox.load(args.input_bbox,
+                                        args.use_deprecated_pickle)
+            if not args.ignore_voxel_size:
+                voxel_size = img.header.get_zooms()[0:3]
+                if not np.allclose(voxel_size, wbbox.voxel_size[0:3], atol=1e-03):
+                    raise IOError("Bounding box and data voxel sizes are not "
+                                "compatible. Use option --ignore_voxel_size "
+                                "to ignore this test.")
+        else:
+            wbbox = compute_nifti_bounding_box(img)
+            if args.output_bbox:
+                wbbox.dump(args.output_bbox, args.use_deprecated_pickle)
 
-    out_nifti_file = crop_volume(img, wbbox)
+        out_nifti_file = crop_volume(img, wbbox)
+
+    # save cropped volume
     nib.save(out_nifti_file, args.out_image)
 
 
