@@ -21,9 +21,8 @@ import numpy as np
 from numpy.lib import stride_tricks
 from scipy.ndimage import (binary_closing, binary_dilation,
                            binary_erosion, binary_opening,
-                           gaussian_filter)
+                           gaussian_filter, convolve)
 from skimage.filters import threshold_otsu
-
 from scilpy.utils import is_float
 
 
@@ -51,6 +50,7 @@ def get_array_ops():
         ('log_e', natural_log),
         ('convert', convert),
         ('invert', invert),
+        ('flip', flip),
         ('addition', addition),
         ('subtraction', subtraction),
         ('multiplication', multiplication),
@@ -58,6 +58,7 @@ def get_array_ops():
         ('maximum', maximum),
         ('mean', mean),
         ('std', std),
+        ('local_variance', local_variance),
         ('correlation', neighborhood_correlation),
         ('union', union),
         ('intersection', intersection),
@@ -285,6 +286,45 @@ def lower_threshold(input_list, ref_img):
     output_data[data > input_list[1]] = 1
 
     return output_data
+
+
+def flip(input_list, ref_img):
+    """
+    flip: IMG AXIS
+        Flip image IMG about axis AXIS.
+    """
+    _validate_length(input_list, 2)
+    _validate_type(input_list[0], nib.Nifti1Image)
+    _validate_float(input_list[1])
+
+    data = input_list[0].get_fdata()
+    axis = int(input_list[1])
+    output_data = np.flip(data, axis)
+
+    return output_data
+
+
+def local_variance(input_list, ref_img):
+    """
+    local_variance: IMG RADIUS
+        Compute local variance of image IMG over the
+        neighbourhood defined by RADIUS.
+    """
+    _validate_length(input_list, 2)
+    _validate_type(input_list[0], nib.Nifti1Image)
+    _validate_float(input_list[1])
+
+    radius = input_list[1]
+    width = int(2*radius) + 1
+    data = input_list[0].get_fdata()
+    wfilter = np.ones((width, width, width), dtype=float)
+    wfilter /= np.sum(wfilter)
+    local_mean = convolve(data, wfilter)
+    square_diff = (data - local_mean)**2
+    # variance = convolve(square_diff, wfilter)
+
+    return square_diff
+
 
 
 def upper_threshold(input_list, ref_img):
