@@ -67,8 +67,13 @@ def main():
 
     fodf = in_fodf.get_fdata()
     priors = in_priors.get_fdata()
+
+    # replace nan values by 0s
+    priors[np.isnan(priors)] = 0
+
     mask = in_mask.get_fdata().astype(bool)
     priors_in_mask = priors[mask]
+    print(priors_in_mask.min(), priors_in_mask.max())
 
     sh_basis_fodf, legacy_fodf = parse_sh_basis_arg(args)
     sh_order_fodf = order_from_ncoef(fodf.shape[-1])
@@ -86,10 +91,11 @@ def main():
     output_priors[mask] = smooth_priors_sh
 
     # normalized convolution for spatial smoothing
-    output_priors[mask] = gaussian_filter(output_priors*mask.astype(float)[..., None],
-                                       sigma=1.0, axes=(0,1,2))[mask]
-    norm_weights = gaussian_filter(mask.astype(float), sigma=1.0)
-    output_priors[mask] /= norm_weights[mask][..., None]
+    if args.sigma > 0:
+        output_priors[mask] = gaussian_filter(output_priors*mask.astype(float)[..., None],
+                                        sigma=args.sigma, axes=(0,1,2))[mask]
+        norm_weights = gaussian_filter(mask.astype(float), sigma=args.sigma)
+        output_priors[mask] /= norm_weights[mask][..., None]
 
     if args.out_priors:
         nib.save(nib.Nifti1Image(output_priors, in_priors.affine), args.out_priors)
@@ -101,12 +107,18 @@ def main():
                                 legacy=legacy_priors)
 
     # L-max normalization for applying to FODF
-    smooth_priors_sf /= np.max(smooth_priors_sf, keepdims=True)
+    smooth_priors_sf_max = np.max(smooth_priors_sf, axis=-1)
+    smooth_priors_sf[smooth_priors_sf_max > 0] /= \
+        smooth_priors_sf_max[smooth_priors_sf_max > 0].reshape((-1, 1))
+
     fodf_sf = sh_to_sf(fodf[mask], sphere, sh_order_max=sh_order_fodf,
                        basis_type=sh_basis_fodf, legacy=legacy_fodf)
-    efod_sf = fodf_sf * smooth_priors_sf
-    efod_sf = efod_sf / np.max(efod_sf, axis=1, keepdims=True)\
-        * np.max(fodf_sf, axis=1, keepdims=True)
+    fodf_sf_max = np.max(fodf_sf, axis=1)
+
+    efod_sf = np.zeros_like(fodf_sf)
+    efod_sf[fodf_sf_max > 0] = np.maximum(fodf_sf[fodf_sf_max > 0] / fodf_sf_max[fodf_sf_max > 0].reshape((-1, 1)),
+                                          smooth_priors_sf[fodf_sf_max > 0])
+    efod_sf = efod_sf * fodf_sf_max[:, None]
 
     # Back to SH (last time)
     efod_sh = sf_to_sh(efod_sf, sphere=sphere, sh_order_max=sh_order_fodf,
