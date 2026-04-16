@@ -59,8 +59,14 @@ def get_endpoints_density_map(sft, point_to_select=1, to_millimeters=False,
         sft.to_corner()
         sft.streamlines._data = sft.streamlines._data
         for streamline in sft.streamlines:
-            endpoints_mask[tuple(streamline[0].astype(np.int16))] += 1
-            endpoints_mask[tuple(streamline[-1].astype(np.int16))] += 1
+            try:
+                endpoints_mask[tuple(streamline[0].astype(np.int16))] += 1
+            except IndexError:
+                print(f'({streamline[0]}) out of bound for dimensions ({sft.dimensions}).')
+            try:
+                endpoints_mask[tuple(streamline[-1].astype(np.int16))] += 1
+            except IndexError:
+                print(f'({streamline[-1]}) out of bound for dimensions ({sft.dimensions}).')
         mask=endpoints_mask
     else:
 

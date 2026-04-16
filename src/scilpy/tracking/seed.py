@@ -387,7 +387,7 @@ class CustomSeedsDispenser(SeedGenerator):
     Adaptation of the scilpy.tracking.seed.SeedGenerator interface for
     using already generated, custom seeds.
     """
-    def __init__(self, custom_seeds, space=Space('vox'),
+    def __init__(self, custom_seeds, voxres, space=Space('vox'),
                  origin=Origin('center')):
         """
         Custom seeds need to be in the same space and origin as the ODFs used
@@ -406,7 +406,8 @@ class CustomSeedsDispenser(SeedGenerator):
         """
         self.origin = origin
         self.space = space
-        self.seeds = custom_seeds
+        self.seeds_vox_corner = custom_seeds
+        self.voxres = voxres
         self.i = 0
 
     def init_generator(self, rng_seed, numbers_to_skip):
@@ -436,14 +437,14 @@ class CustomSeedsDispenser(SeedGenerator):
 
     def get_next_pos(self, random_generator: np.random.Generator,
                      shuffled_indices, which_seed):
-        seed = self.seeds[self.i]
+        seed = self.seeds_vox_corner[self.i%len(self.seeds_vox_corner)]
         self.i += 1
 
         return seed[0], seed[1], seed[2]
 
     def get_next_n_pos(self, random_generator, shuffled_indices,
                        which_seed_start, n):
-        seeds = self.seeds[self.i:self.i+n]
+        seeds = self.seeds_vox_corner[self.i:(self.i+n)]
         self.i += n
 
         return seeds

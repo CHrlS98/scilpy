@@ -21,9 +21,10 @@ import numpy as np
 from numpy.lib import stride_tricks
 from scipy.ndimage import (binary_closing, binary_dilation,
                            binary_erosion, binary_opening,
+                           grey_dilation,
                            gaussian_filter)
 from skimage.filters import threshold_otsu
-
+from skimage.morphology import ball
 from scilpy.utils import is_float
 
 
@@ -866,6 +867,11 @@ def dilation(input_list, ref_img):
         raise ValueError("Dilation value (radius in number of voxels) "
                          "should be an integer of at least 1, but got {}."
                          .format(nb_pass))
+    
+    data = input_list[0].get_fdata(dtype=np.float64)
+    if len(np.unique(data)) != 2:  # grey dilation if not binary
+        footprint = ball(nb_pass)
+        return grey_dilation(data, footprint=footprint)
 
     return binary_dilation(input_list[0].get_fdata(dtype=np.float64),
                            iterations=nb_pass)

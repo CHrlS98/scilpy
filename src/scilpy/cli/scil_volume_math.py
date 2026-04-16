@@ -67,7 +67,7 @@ def main():
 
     # Binary operations require specific verifications
     binary_op = ['union', 'intersection', 'difference', 'invert',
-                 'dilation', 'erosion', 'closing', 'opening']
+                 'erosion', 'closing', 'opening']
 
     if args.operation not in OPERATIONS.keys():
         parser.error('Operation {} not implemented.'.format(args.operation))

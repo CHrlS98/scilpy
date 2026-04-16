@@ -684,7 +684,7 @@ def validate_sh_basis_choice(sh_basis):
                          "'tournier07'.")
 
 
-def add_compression_arg(p, additional_msg=''):
+def add_compression_arg(p, additional_msg='', const=0.1):
     """
     Parameters
     ----------
@@ -693,8 +693,10 @@ def add_compression_arg(p, additional_msg=''):
     additional_msg: str
         Any additional message to be displayed after explanation on the
         compress arg.
+    const: float
+        Default value for compression (mm).
     """
-    p.add_argument('--compress', dest='compress_th', nargs='?', const=0.1,
+    p.add_argument('--compress', dest='compress_th', nargs='?', const=const,
                    type=ranged_type(float, 0, None, min_excluded=True),
                    help='If set, compress the resulting streamline. Value is '
                         'the maximum \ncompression distance in mm.'

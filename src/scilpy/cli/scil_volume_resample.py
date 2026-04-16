@@ -63,6 +63,9 @@ def _build_arg_parser():
                    ' difference after resampling.')
     p.add_argument('--enforce_dimensions', action='store_true',
                    help='Enforce the reference volume dimension.')
+    p.add_argument('--padding_mode', default='nearest',
+                   choices=['constant', 'nearest', 'reflect', 'wrap'],
+                   help="Mode for extrapolation when enforcing dimensions. [%(default)s]")
 
     add_verbose_arg(p)
     add_overwrite_arg(p)
@@ -106,8 +109,8 @@ def main():
         img_zoom_invert = [1 / zoom for zoom in img.header.get_zooms()]
         ref_zoom_invert = [1 / zoom for zoom in ref_img.header.get_zooms()]
 
-        img_affine = np.dot(img.affine[:3, :3], img_zoom_invert)
-        ref_affine = np.dot(ref_img.affine[:3, :3], ref_zoom_invert)
+        img_affine = np.dot(img.affine[:3, :3], img_zoom_invert[:3])
+        ref_affine = np.dot(ref_img.affine[:3, :3], ref_zoom_invert[:3])
 
         if not np.allclose(img_affine, ref_affine):
             parser.error("The --ref image should have the same affine as the "
@@ -119,7 +122,8 @@ def main():
                                     iso_min=args.iso_min,
                                     voxel_res=args.voxel_size,
                                     interp=args.interp,
-                                    enforce_dimensions=args.enforce_dimensions)
+                                    enforce_dimensions=args.enforce_dimensions,
+                                    mode=args.padding_mode)
 
     # Saving results
     zooms = list(resampled_img.header.get_zooms())

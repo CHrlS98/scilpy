@@ -506,7 +506,7 @@ def _interp_code_to_order(interp_code):
 
 def resample_volume(img, ref_img=None, volume_shape=None, iso_min=False,
                     voxel_res=None,
-                    interp='lin', enforce_dimensions=False):
+                    interp='lin', enforce_dimensions=False, mode='nearest'):
     """
     Function to resample a dataset to match the resolution of another reference
     dataset or to the resolution specified as in argument.
@@ -536,6 +536,8 @@ def resample_volume(img, ref_img=None, volume_shape=None, iso_min=False,
     enforce_dimensions: bool, optional
         If True, enforce the reference volume dimension (only if res is not
         None). (Default = False)
+    mode: str, optional
+        Mode for extrapolation. (Default: nearest)
 
     Returns
     -------
@@ -586,7 +588,7 @@ def resample_volume(img, ref_img=None, volume_shape=None, iso_min=False,
     logging.info('Resampling data to %s with mode %s', new_zooms, interp)
 
     data2, affine2 = reslice(data, affine, original_zooms, new_zooms,
-                             _interp_code_to_order(interp))
+                             _interp_code_to_order(interp), mode)
 
     logging.info('Resampled data shape: %s', data2.shape)
     logging.info('Resampled data affine: %s', affine2)

@@ -134,7 +134,7 @@ def add_seeding_options(p):
              'contain a single seed, written in the format: [x, y, z].')
 
 
-def add_out_options(p):
+def add_out_options(p, default_compress=0.1):
     """
     Options that are available in both scil_tracking_local and
     scil_tracking_local_dev scripts.
@@ -142,7 +142,7 @@ def add_out_options(p):
     out_g = p.add_argument_group('Output options')
     msg = ("\nA rule of thumb is to set it to 0.1mm for deterministic \n"
            "streamlines and to 0.2mm for probabilitic streamlines.")
-    add_compression_arg(out_g, additional_msg=msg)
+    add_compression_arg(out_g, additional_msg=msg, const=default_compress)
 
     add_overwrite_arg(out_g)
     out_g.add_argument('--save_seeds', action='store_true',

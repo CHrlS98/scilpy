@@ -108,6 +108,11 @@ def _build_arg_parser():
              'kept per bundle. Else, random downsampling is performed '
              '(default).')
     downsampling_group.add_argument(
+        '--nb_streamlines_is_pct', action='store_true',
+        help='If set, the number of streamlines to keep is interpreted as a '
+             'percentage of the original number of streamlines, instead of an '
+             'absolute number.')
+    downsampling_group.add_argument(
         '--qbx_thresholds', nargs='+', type=float, default=[40, 30, 20],
         help="If you chose option '--downsample_per_cluster', you may set \n"
              "the Quickbundles threshold value(s) here. Default: %(default)s")
@@ -128,6 +133,14 @@ def main():
     args = parser.parse_args()
     logging.getLogger().setLevel(logging.getLevelName(args.verbose))
 
+    nb_streamlines = args.nb_streamlines
+    if args.nb_streamlines_is_pct:
+        if not 0 < args.nb_streamlines < 100:
+            parser.error("When using option --nb_streamlines_is_pct, the "
+                         "number of streamlines must be between 0 and 100.")
+        nb_streamlines = int(args.nb_streamlines / 100.0 * len(
+            load_tractogram_with_reference(parser, args, args.in_tractogram).streamlines))
+
     # Verifications
     assert_inputs_exist(parser, args.in_tractogram, args.reference)
     assert_outputs_exist(parser, args, args.out_tractogram)
@@ -147,7 +160,7 @@ def main():
     original_number = len(sft.streamlines)
 
     # Processing
-    if args.nb_streamlines > original_number:
+    if nb_streamlines > original_number:
         if args.never_upsample:
             logging.info(
                 "Number of streamlines is higher than in the original "
@@ -162,20 +175,20 @@ def main():
                              "upsampling option has been selected. Please "
                              "choose either --point_wise_std, --tube_radius, "
                              "or --never_upsample.")
-            sft = upsample_tractogram(sft, args.nb_streamlines,
+            sft = upsample_tractogram(sft, nb_streamlines,
                                       args.point_wise_std, args.tube_radius,
                                       args.gaussian, args.compress_th,
                                       args.seed)
-    elif args.nb_streamlines < original_number:
+    elif nb_streamlines < original_number:
         if args.downsample_per_cluster:
             # output contains rejected streamlines, we don't use them.
             sft, _ = split_sft_randomly_per_cluster(
-                sft, [args.nb_streamlines], args.seed, args.qbx_thresholds)
+                sft, [nb_streamlines], args.seed, args.qbx_thresholds)
             logging.info("Kept {} out of {} expected streamlines."
-                         .format(len(sft), args.nb_streamlines))
+                         .format(len(sft), nb_streamlines))
         else:
             # output is a list of two: kept and rejected.
-            sft = split_sft_randomly(sft, args.nb_streamlines, args.seed)[0]
+            sft = split_sft_randomly(sft, nb_streamlines, args.seed)[0]
     else:
         logging.info("Number of streamlines in in_tractogram is already "
                      "correct! Out_tractogram will be a copy of "
