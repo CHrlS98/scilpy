@@ -53,6 +53,8 @@ def _build_arg_parser():
                    help='Rendering zoom. '
                         'A value greater than 1 is a zoom-in,\n'
                         'a value less than 1 is a zoom-out [%(default)s].')
+    p.add_argument('--min_max_norm', action='store_true',
+                   help='Normalize the volume between 0 and 1, using its min and max values.')
 
     p.add_argument('--ttf', default=None,
                    help='Path of the true type font to use for legends.')
@@ -66,9 +68,11 @@ def _build_arg_parser():
                    help='Resolution of thumbnails used in mosaic '
                         '[%(default)s].')
 
-    p.add_argument('--light_screenshot', action='store_true',
-                   help='Keep only 3 views instead of 6 '
-                        '[%(default)s].')
+    light_screenshot_group = p.add_mutually_exclusive_group()
+    light_screenshot_group.add_argument('--light_screenshot', action='store_true',
+                                        help='Keep only 3 views instead of 6 [%(default)s].')
+    light_screenshot_group.add_argument('--very_light_screenshot', action='store_true',
+                                        help='Keep only 1 view instead of 6 [%(default)s].')
     p.add_argument('--no_information', action='store_true',
                    help='Don\'t display axis and bundle information '
                         '[%(default)s].')
@@ -78,6 +82,8 @@ def _build_arg_parser():
     p.add_argument('--no_streamline_number', action='store_true',
                    help='Don\'t display bundle streamlines number '
                         '[%(default)s].')
+    p.add_argument('--suffix_to_remove', default=None,
+                   help='Suffix to remove from bundle name for display purposes.')
 
     add_reference_arg(p)
     add_verbose_arg(p)
@@ -100,7 +106,7 @@ def draw_column_with_names(draw, output_names, cell_width, cell_height,
         j = cell_height * num
         draw.multiline_text((cell_half_width, j + cell_half_height),
                             name.replace('_', '\n'), font=font,
-                            anchor='mm', align='center')
+                            anchor='mm', align='center', fill=(0, 0, 0))
 
     # First column, last row: description of the information to show
     if not (no_bundle_name and no_streamline_count):
@@ -115,7 +121,7 @@ def draw_column_with_names(draw, output_names, cell_width, cell_height,
         spacing = np.clip(cell_height // 10, 1, font.size)
         draw.multiline_text((cell_width - padding, j + cell_half_height),
                             '\n'.join(text), font=font, anchor='rm',
-                            align='right', spacing=spacing)
+                            align='right', spacing=spacing, fill=(0, 0, 0))
 
 
 def draw_bundle_information(draw, bundle_name, nbr_of_elem, col_center,
@@ -126,7 +132,7 @@ def draw_bundle_information(draw, bundle_name, nbr_of_elem, col_center,
     draw.multiline_text((col_center, cell_height * view_number + row_center),
                         "\n".join(filter(None, [bundle_name, nbr_of_elem])),
                         font=font, anchor='mm', align='center',
-                        spacing=spacing)
+                        spacing=spacing, fill=(0, 0, 0))
 
 
 def set_img_in_cell(mosaic, ren, view_number, width, height, i):
@@ -135,7 +141,7 @@ def set_img_in_cell(mosaic, ren, view_number, width, height, i):
     out = window.snapshot(ren, size=(width, height))
     j = height * view_number
     # fury-gl flips image
-    image = Image.fromarray(out[::-1])
+    image = Image.fromarray(out[:, ::-1])
     image.thumbnail((width, height))
     image = image.rotate(180)
     mosaic.paste(image, (i, j))
@@ -166,6 +172,8 @@ def main():
         output_names = ['axial_superior',
                         'coronal_posterior',
                         'sagittal_left']
+    if args.very_light_screenshot:
+        output_names = ['axial_superior']
 
     output_dir = os.path.dirname(args.out_image)
     if output_dir:
@@ -182,15 +190,17 @@ def main():
     rows = 6
     if args.light_screenshot:
         rows = 3
+    if args.very_light_screenshot:
+        rows = 1
     cols = len(args.in_bundles)
 
     # Creates a new empty image, RGB mode
     if args.no_information:
-        mosaic = Image.new('RGB', (cols * width, rows * height))
+        mosaic = Image.new('RGB', (cols * width, rows * height), color='white')
     elif args.no_bundle_name and args.no_streamline_number:
-        mosaic = Image.new('RGB', ((cols + 1) * width, rows * height))
+        mosaic = Image.new('RGB', ((cols + 1) * width, rows * height), color='white')
     else:
-        mosaic = Image.new('RGB', ((cols + 1) * width, (rows + 1) * height))
+        mosaic = Image.new('RGB', ((cols + 1) * width, (rows + 1) * height), color='white')
 
     # Prepare draw and font objects to render text
     draw = ImageDraw.Draw(mosaic)
@@ -200,8 +210,11 @@ def main():
     ref_img = nib.load(args.in_volume)
     data = ref_img.get_fdata(dtype=np.float32)
     affine = ref_img.affine
-    mean, std = data[data > 0].mean(), data[data > 0].std()
-    value_range = (mean - 0.5 * std, mean + 1.5 * std)
+    if not args.min_max_norm:
+        mean, std = data[data > 0].mean(), data[data > 0].std()
+        value_range = (mean - 0.5 * std, mean + 1.5 * std)
+    else:
+        value_range = (data.min(), data.max())
 
     # First column with rows description
     if not args.no_information:
@@ -271,54 +284,58 @@ def main():
             view_number = 0
             set_img_in_cell(mosaic, ren, view_number, width, height, i)
 
-            if not args.light_screenshot:
-                ren.pitch(180)
-                ren.reset_camera()
-                ren.zoom(zoom)
-                view_number += 1
-                set_img_in_cell(mosaic, ren, view_number, width, height, i)
+            if not args.very_light_screenshot:
+                if not args.light_screenshot:
+                    ren.pitch(180)
+                    ren.reset_camera()
+                    ren.zoom(zoom)
+                    view_number += 1
+                    set_img_in_cell(mosaic, ren, view_number, width, height, i)
 
-            ren.rm(slice_actor)
-            slice_actor2 = slice_actor.copy()
-            slice_actor2.display(None, slice_actor2.shape[1]//2, None)
-            slice_actor2.opacity(opacity)
-            ren.add(slice_actor2)
+                ren.rm(slice_actor)
+                slice_actor2 = slice_actor.copy()
+                slice_actor2.display(None, slice_actor2.shape[1]//2, None)
+                slice_actor2.opacity(opacity)
+                ren.add(slice_actor2)
 
-            ren.pitch(90)
-            ren.set_camera(view_up=(0, 0, 1))
-            ren.reset_camera()
-            ren.zoom(zoom)
-            view_number += 1
-            set_img_in_cell(mosaic, ren, view_number, width, height, i)
-
-            if not args.light_screenshot:
-                ren.pitch(180)
+                ren.pitch(90)
                 ren.set_camera(view_up=(0, 0, 1))
                 ren.reset_camera()
                 ren.zoom(zoom)
                 view_number += 1
                 set_img_in_cell(mosaic, ren, view_number, width, height, i)
 
-            ren.rm(slice_actor2)
-            slice_actor3 = slice_actor.copy()
-            slice_actor3.display(slice_actor3.shape[0]//2, None, None)
-            slice_actor3.opacity(opacity)
-            ren.add(slice_actor3)
+                if not args.light_screenshot:
+                    ren.pitch(180)
+                    ren.set_camera(view_up=(0, 0, 1))
+                    ren.reset_camera()
+                    ren.zoom(zoom)
+                    view_number += 1
+                    set_img_in_cell(mosaic, ren, view_number, width, height, i)
 
-            ren.yaw(90)
-            ren.reset_camera()
-            ren.zoom(zoom)
-            view_number += 1
-            set_img_in_cell(mosaic, ren, view_number, width, height, i)
+                ren.rm(slice_actor2)
+                slice_actor3 = slice_actor.copy()
+                slice_actor3.display(slice_actor3.shape[0]//2, None, None)
+                slice_actor3.opacity(opacity)
+                ren.add(slice_actor3)
 
-            if not args.light_screenshot:
-                ren.yaw(180)
+                ren.yaw(90)
                 ren.reset_camera()
                 ren.zoom(zoom)
                 view_number += 1
                 set_img_in_cell(mosaic, ren, view_number, width, height, i)
 
+                if not args.light_screenshot:
+                    ren.yaw(180)
+                    ren.reset_camera()
+                    ren.zoom(zoom)
+                    view_number += 1
+                    set_img_in_cell(mosaic, ren, view_number, width, height, i)
+
         if not args.no_information:
+            if args.suffix_to_remove:
+                bundle_name = bundle_name[:bundle_name.find(args.suffix_to_remove)]
+            bundle_name = bundle_name.replace('_', ' ')
             if args.no_bundle_name:
                 bundle_name = None
             if args.no_streamline_number:

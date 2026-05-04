@@ -38,15 +38,11 @@ import logging
 from dipy.data import get_sphere, HemiSphere
 from dipy.direction import (ProbabilisticDirectionGetter,
                             DeterministicMaximumDirectionGetter)
-from dipy.io.utils import (get_reference_info,
-                           create_tractogram_header)
 from dipy.tracking.local_tracking import ParticleFilteringTracking
 from dipy.tracking.stopping_criterion import (ActStoppingCriterion,
                                               CmcStoppingCriterion)
 from dipy.tracking import utils as track_utils
-from dipy.tracking.streamlinespeed import length, compress_streamlines
 import nibabel as nib
-from nibabel.streamlines import LazyTractogram
 import numpy as np
 
 from scilpy.io.image import get_data_as_mask
@@ -55,7 +51,7 @@ from scilpy.io.utils import (add_overwrite_arg, add_sh_basis_args,
                              assert_outputs_exist, parse_sh_basis_arg,
                              assert_headers_compatible, add_compression_arg,
                              verify_compression_th)
-from scilpy.tracking.utils import get_theta
+from scilpy.tracking.utils import get_theta, save_tractogram
 from scilpy.version import version_string
 
 
@@ -255,6 +251,7 @@ def main():
         seeds_count=nb_seeds,
         seed_count_per_voxel=seed_per_vox,
         random_seed=args.seed)
+    total_nb_seeds = len(seeds)
 
     # Note that max steps is used once for the forward pass, and
     # once for the backwards. This doesn't, in fact, control the real
@@ -273,37 +270,17 @@ def main():
         particle_count=args.particles,
         return_all=args.keep_all,
         random_seed=args.seed,
-        save_seeds=args.save_seeds)
+        save_seeds=True)
 
-    scaled_min_length = args.min_length / voxel_size
-    scaled_max_length = args.max_length / voxel_size
+    # save streamlines on-the-fly to file
+    tracts_format = nib.streamlines.detect_format(args.out_tractogram)
+    save_tractogram(pft_streamlines, tracts_format,
+                    fodf_sh_img, total_nb_seeds, args.out_tractogram,
+                    args.min_length, args.max_length, args.compress_th,
+                    args.save_seeds, args.verbose)
 
-    if args.save_seeds:
-        filtered_streamlines, seeds = \
-            zip(*((s, p) for s, p in pft_streamlines
-                  if scaled_min_length <= length(s) <= scaled_max_length))
-        data_per_streamlines = {'seeds': lambda: seeds}
-    else:
-        filtered_streamlines = \
-            (s for s in pft_streamlines
-             if scaled_min_length <= length(s) <= scaled_max_length)
-        data_per_streamlines = {}
-
-    if args.compress_th:
-        filtered_streamlines = (
-            compress_streamlines(s, args.compress_th)
-            for s in filtered_streamlines)
-
-    tractogram = LazyTractogram(lambda: filtered_streamlines,
-                                data_per_streamlines,
-                                affine_to_rasmm=seed_img.affine)
-
-    filetype = nib.streamlines.detect_format(args.out_tractogram)
-    reference = get_reference_info(seed_img)
-    header = create_tractogram_header(filetype, *reference)
-
-    # Use generator to save the streamlines on-the-fly
-    nib.streamlines.save(tractogram, args.out_tractogram, header=header)
+    # Final logging
+    logging.info('Saved tractogram to {0}.'.format(args.out_tractogram))
 
 
 if __name__ == '__main__':
