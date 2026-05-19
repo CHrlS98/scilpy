@@ -125,6 +125,8 @@ def _build_arg_parser():
                        type=float, default=1.,
                        help='Length of PFT forward tracking (mm). '
                             '[%(default)s]')
+    pft_g.add_argument('--max_trials', type=int, default=20,
+                       help='Maximum number of trials for PFT. [%(default)s]')
 
     out_g = p.add_argument_group('Output options')
     out_g.add_argument('--all', dest='keep_all', action='store_true',
@@ -267,6 +269,7 @@ def main():
         maxlen=max_steps,
         pft_back_tracking_dist=args.back_tracking,
         pft_front_tracking_dist=args.forward_tracking,
+        pft_max_trial=args.max_trials,
         particle_count=args.particles,
         return_all=args.keep_all,
         random_seed=args.seed,
