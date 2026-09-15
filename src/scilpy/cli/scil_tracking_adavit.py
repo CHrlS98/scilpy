@@ -166,13 +166,12 @@ def main():
     verify_seed_options(parser, args)
 
     tracts_format = detect_format(args.out_tractogram)
-    if tracts_format is not TrkFile:
+    if args.save_seeds and tracts_format is not TrkFile:
         logging.warning("You have selected option --save_seeds but you are "
                         "not saving your tractogram as a .trk file. \n"
                         "Data_per_point information CANNOT be saved.\n"
                         "Ignoring.")
         args.save_seeds = False
-
     # ------- PREPARING DATA -------
     theta = gm.math.radians(get_theta(args.theta, args.algo))
 
@@ -268,8 +267,7 @@ def main():
 
     # condition for backtracking
     backtrack = args.mask_exclude is not None and args.algo == 'prob'
-    backtrack_n_pts = int(args.backtrack_distance / step_size)
-
+    backtrack_n_pts = max(1, int(args.backtrack_distance / step_size)) if backtrack else 0
     logging.info("Instantiating tracker.")
     tracker = TrackerAdaViT(propagator, mask, seed_generator, nbr_seeds, min_nbr_pts,
                             max_nbr_pts, args.max_invalid_nb_points,

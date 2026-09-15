@@ -576,8 +576,8 @@ class Tracker(object):
 class TrackerAdaViT(Tracker):
     """
     AdaViT uses a 4D volume containing many tracking masks and tracks only
-    in the union of all masks intersecting the streamline trajectory. In the
-    original publication, AdaViT is used with tracking masks estimated from
+    in the union of all masks that fully contain the streamline trajectory so far.
+    In the original publication, AdaViT is used with tracking masks estimated from
     viral tracing experiments, but in practice, any list of masks can be used.
 
     Parameters
@@ -666,9 +666,8 @@ class TrackerAdaViT(Tracker):
         self.backtracking = backtracking
 
         # assert space
-        if self.space != Space.VOX and self.origin != Origin.CENTER:
+        if self.space != Space.VOX or self.origin != Origin.CENTER:
             raise NotImplementedError("This version of the Tracker only works in VOX space with CENTER origin.")
-
         if (seed_generator.origin != propagator.origin or seed_generator.space != propagator.space):
             raise ValueError("Seed generator and propagator must work with the same space and origin!")
 
