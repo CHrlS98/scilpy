@@ -64,6 +64,15 @@ def _build_arg_parser():
                    help='Sigmas used, in voxel space. For Frangi method, this can'
                         'be a list. [%(default)s]')
 
+    axes_group = p.add_argument_group('In-plane filtering options')
+    axes_group_mutex = axes_group.add_mutually_exclusive_group()
+    axes_group_mutex.add_argument('--inplane_sagittal', action='store_true',
+                                  help='Compute orientations inside sagittal plane only.')
+    axes_group_mutex.add_argument('--inplane_coronal', action='store_true',
+                                  help='Compute orientations inside coronal plane only.')
+    axes_group_mutex.add_argument('--inplane_axial', action='store_true',
+                                  help='Compute orientations inside axial plane only.')
+
     frangi_group = p.add_argument_group('Frangi filter parameters')
     frangi_group.add_argument('--alpha', default=0.5, type=float,
                               help='Alpha parameter controlling sensitivity to plate-like structures. \n'
@@ -75,6 +84,9 @@ def _build_arg_parser():
                               help='Correction constant that adjusts the sensitivity to areas\n'
                                    'of high variance/texture/structure. By default, half of the\n'
                                    'maximum Hessian norm.')
+    frangi_group.add_argument('--threshold', type=float,
+                              help='Threshold on fiberness value. Orientation is discarded when fiberness is\n'
+                                   'below this value. [%(default)s]')
 
     p.add_argument('--padding_mode', default='constant',
                    choices=['constant', 'edge',
@@ -133,10 +145,19 @@ def main():
     in_data = in_im.get_fdata().astype(np.float32)
 
     if args.method == 'frangi':
+        axes = (0, 1, 2)
+        if args.inplane_sagittal:
+            axes = (1, 2)
+        elif args.inplane_coronal:
+            axes = (0, 2)
+        elif args.inplane_axial:
+            axes = (0, 1)
+
         prob, direction = frangi_filter(in_data, scales, alpha=args.alpha,
                                         beta=args.beta, gamma=args.gamma,
                                         padding_mode=args.padding_mode,
-                                        padding_cval=args.padding_cval)
+                                        padding_cval=args.padding_cval,
+                                        axes=axes, threshold=args.threshold)
 
     elif args.method == 'structure_tensor':
         A = structure_tensor_wrapper(
@@ -152,10 +173,8 @@ def main():
         direction = evecs[..., 0]
 
     # write outputs
-    nib.save(nib.Nifti1Image(direction.astype(
-        np.float32), in_im.affine), args.out_direction)
-    nib.save(nib.Nifti1Image(prob.astype(np.float32),
-             in_im.affine), args.out_probability)
+    nib.save(nib.Nifti1Image(direction.astype(np.float32), in_im.affine), args.out_direction)
+    nib.save(nib.Nifti1Image(prob.astype(np.float32), in_im.affine), args.out_probability)
 
 
 if __name__ == '__main__':

@@ -61,9 +61,8 @@ def divide_nonzero(nd_array1, nd_array2, new_val=1e-10):
     return divided
 
 
-def analyze_hessian_eigen(img, sigma, trunc=4,
-                          padding_mode='reflect',
-                          padding_cval=0):
+def analyze_hessian_eigen(img, sigma, trunc=4, padding_mode='reflect',
+                          padding_cval=0, axes=(0, 1, 2)):
     """
     Compute the eigenvalues of local Hessian matrices
     of the input image array, sorted by absolute value (in ascending order),
@@ -86,7 +85,9 @@ def analyze_hessian_eigen(img, sigma, trunc=4,
         Hessian eigenvectors related to the dominant (minimum) eigenvalue
     """
     hessian = compute_scaled_hessian(img, sigma=sigma, trunc=trunc,
-                                     padding_mode=padding_mode, padding_cval=padding_cval)
+                                     padding_mode=padding_mode,
+                                     padding_cval=padding_cval,
+                                     axes=axes)
     eigval, dom_eigvec = compute_dominant_eigen(hessian)
 
     return eigval, dom_eigvec
@@ -116,7 +117,7 @@ def compute_dominant_eigen(hessian):
     return srt_eigval, dom_eigvec
 
 
-def compute_frangi_features(eigen1, eigen2, eigen3, gamma):
+def compute_frangi_features(eigval, gamma):
     """
     Compute the basic image features employed by the Frangi filter.
 
@@ -143,10 +144,14 @@ def compute_frangi_features(eigen1, eigen2, eigen3, gamma):
         background score sensitivity
         (automatically computed if not provided as input)
     """
-    ra = divide_nonzero(np.abs(eigen2), np.abs(eigen3))
-    rb = divide_nonzero(np.abs(eigen1), np.sqrt(
-        np.abs(np.multiply(eigen2, eigen3))))
-    s = compute_structureness(eigen1, eigen2, eigen3)
+    if len(eigval) == 2:
+        eigen1, eigen2 = eigval
+    elif len(eigval) == 3:
+        eigen1, eigen2, eigen3 = eigval
+        ra = divide_nonzero(np.abs(eigen2), np.abs(eigen3))
+        rb = divide_nonzero(np.abs(eigen1), np.sqrt(
+            np.abs(np.multiply(eigen2, eigen3))))
+        s = compute_structureness(eigen1, eigen2, eigen3)
 
     # compute default gamma sensitivity
     if gamma is None:
@@ -155,7 +160,9 @@ def compute_frangi_features(eigen1, eigen2, eigen3, gamma):
     return ra, rb, s, gamma
 
 
-def compute_scaled_hessian(img, sigma=1, trunc=4, padding_mode='reflect', padding_cval=0):
+def compute_scaled_hessian(img, sigma=1, trunc=4,
+                           padding_mode='reflect',
+                           padding_cval=0, axes=(0, 1, 2)):
     """
     Computes the scaled and normalized Hessian matrices of the input image.
     This is then used to estimate Frangi's vesselness probability score.
@@ -180,25 +187,24 @@ def compute_scaled_hessian(img, sigma=1, trunc=4, padding_mode='reflect', paddin
     """
     # scale selection
     scaled_img = ndi.gaussian_filter(img, sigma=sigma, output=np.float32,
-                                     truncate=trunc,
+                                     truncate=trunc, axes=axes,
                                      mode=padding_mode if padding_mode != 'edge' else 'nearest',
                                      cval=padding_cval)
 
     # compute the first order gradients
-    gradient_list = np.gradient(scaled_img)
+    gradient_list = np.gradient(scaled_img, axis=axes)
 
     # compute the Hessian matrix elements
     hessian_elements = [np.gradient(gradient_list[ax0], axis=ax1)
-                        for ax0, ax1 in combinations_with_replacement(range(img.ndim), 2)]
+                        for (ax0, _), (_, ax1) in combinations_with_replacement(enumerate(axes), 2)]
 
     # scale the elements of the Hessian matrix
     corr_factor = sigma ** 2
     hessian_elements = [corr_factor * element for element in hessian_elements]
 
     # create the Hessian matrix from its basic elements
-    hessian = np.zeros((img.ndim, img.ndim) +
-                       scaled_img.shape, dtype=scaled_img.dtype)
-    for index, (ax0, ax1) in enumerate(combinations_with_replacement(range(img.ndim), 2)):
+    hessian = np.zeros((len(axes), len(axes)) + scaled_img.shape, dtype=scaled_img.dtype)
+    for index, (ax0, ax1) in enumerate(combinations_with_replacement(range(len(axes)), 2)):
         element = hessian_elements[index]
         hessian[ax0, ax1, ...] = element
         if ax0 != ax1:
@@ -222,11 +228,11 @@ def compute_background_score(s, gamma):
     return 1 - np.exp(np.divide(np.negative(np.square(s)), 2 * np.square(gamma)))
 
 
-def compute_structureness(eigen1, eigen2, eigen3):
-    return np.sqrt(np.square(eigen1) + np.square(eigen2) + np.square(eigen3))
+def compute_structureness(eigval):
+    return np.sqrt(np.sum(np.stack(eigval, axis=-1)**2, axis=-1))
 
 
-def compute_scaled_vesselness(eigen1, eigen2, eigen3, alpha, beta, gamma):
+def compute_scaled_vesselness(eigval, alpha, beta, gamma):
     """
     Estimate Frangi's vesselness probability.
 
@@ -250,17 +256,35 @@ def compute_scaled_vesselness(eigen1, eigen2, eigen3, alpha, beta, gamma):
     vesselness: numpy.ndarray (axis order=(Z,Y,X), dtype=float)
         Frangi's vesselness likelihood image
     """
-    ra, rb, s, gamma = compute_frangi_features(eigen1, eigen2, eigen3, gamma)
-    plate = compute_plate_like_score(ra, alpha)
+    if len(eigval) == 2:
+        eigen1, eigen2 = eigval
+        rb = divide_nonzero(eigen1, eigen2)
+    elif len(eigval) == 3:
+        eigen1, eigen2, eigen3 = eigval
+        ra = divide_nonzero(np.abs(eigen2), np.abs(eigen3))
+        rb = divide_nonzero(np.abs(eigen1), np.sqrt(
+            np.abs(np.multiply(eigen2, eigen3))))
+
+    s = compute_structureness(eigval)
+
+    # compute default gamma sensitivity
+    if gamma is None:
+        gamma = 0.5 * np.max(s)
+
     blob = compute_blob_like_score(rb, beta)
     background = compute_background_score(s, gamma)
-    vesselness = plate * blob * background
+    vesselness = blob * background
+
+    # plate discriminator for 3D case
+    if len(eigval) == 3:
+        plate = compute_plate_like_score(ra, alpha)
+        vesselness = vesselness * plate
 
     return vesselness
 
 
 def compute_scaled_orientation(scale_px, img, alpha=0.001, beta=1, gamma=None,
-                               padding_mode='reflect', padding_cval=0):
+                               padding_mode='reflect', padding_cval=0, axes=(0, 1, 2)):
     """
     Compute fiber orientation vectors at the input spatial scale of interest
 
@@ -293,20 +317,21 @@ def compute_scaled_orientation(scale_px, img, alpha=0.001, beta=1, gamma=None,
     # compute local Hessian matrices and perform eigenvalue decomposition
     eigval, eigvec = analyze_hessian_eigen(img, scale_px, trunc=4,
                                            padding_mode=padding_mode,
-                                           padding_cval=padding_cval)
+                                           padding_cval=padding_cval,
+                                           axes=axes)
 
     # compute Frangi's vesselness probability image
-    eigen1, eigen2, eigen3 = eigval
     vesselness = compute_scaled_vesselness(
-        eigen1, eigen2, eigen3, alpha=alpha, beta=beta, gamma=gamma)
-    frangi_img = reject_vesselness_background(vesselness, eigen2, eigen3)
+        eigval, alpha=alpha, beta=beta, gamma=gamma)
+    frangi_img = reject_vesselness_background(vesselness, eigval)
     eigval = np.stack(eigval, axis=-1)
 
     return frangi_img, eigvec, eigval
 
 
 def frangi_filter(img, scales_px=1, *, alpha=0.001, beta=1.0, gamma=None,
-                  padding_mode='reflect', padding_cval=0):
+                  padding_mode='reflect', padding_cval=0, axes=(0, 1, 2),
+                  threshold=None):
     """
     Apply 3D Frangi filter to 3D microscopy image.
 
@@ -326,6 +351,8 @@ def frangi_filter(img, scales_px=1, *, alpha=0.001, beta=1.0, gamma=None,
         mode for padding the image
     padding_cval: float
         constant value for padding
+    axes: tuple of int
+        axes along which to compute orientation
 
     Returns
     -------
@@ -337,24 +364,35 @@ def frangi_filter(img, scales_px=1, *, alpha=0.001, beta=1.0, gamma=None,
     # single-scale or parallel multi-scale vesselness analysis
     scales_px = np.atleast_1d(scales_px)
     ns = len(scales_px)
-    frangi_max = np.zeros(img.shape, dtype='float32')
-    eigvec_max = np.zeros(img.shape + (3,), dtype='float32')
+    valid_voxels = np.zeros(img.shape, dtype=bool)
+    frangi_max = np.full(img.shape, 0.0 if threshold is None else threshold, dtype='float32')
+    eigvec_max = np.zeros(img.shape + (len(axes),), dtype='float32')
     for s in range(ns):
         frangi, eigvec, _ = compute_scaled_orientation(scales_px[s], img, alpha=alpha,
                                                        beta=beta, gamma=gamma,
                                                        padding_mode=padding_mode,
-                                                       padding_cval=padding_cval)
+                                                       padding_cval=padding_cval,
+                                                       axes=axes)
         max_where = frangi_max < frangi
+        valid_voxels = valid_voxels | max_where
         frangi_max[max_where] = frangi[max_where]
         eigvec_max[max_where] = eigvec[max_where]
 
     frangi = frangi_max
-    fbr_vec = eigvec_max
+    if len(axes) < 3:
+        fbr_vec = np.zeros(img.shape + (3,), dtype='float32')
+        for i, ax in enumerate(axes):
+            fbr_vec[..., ax] = eigvec_max[..., i]
+    else:
+        fbr_vec = eigvec_max
+
+    frangi[~max_where] = 0.0
+    fbr_vec[~max_where] = 0.0
 
     return frangi, fbr_vec
 
 
-def reject_vesselness_background(vesselness, eigen2, eigen3):
+def reject_vesselness_background(vesselness, eigval):
     """
     Reject the fiber background, exploiting the sign of the "secondary"
     eigenvalues λ2 and λ3.
@@ -376,7 +414,9 @@ def reject_vesselness_background(vesselness, eigen2, eigen3):
         masked Frangi's vesselness likelihood image
     """
     bg_msk = np.isnan(vesselness)
-    bg_msk = np.logical_or(bg_msk, np.logical_or(eigen2 > 0, eigen3 > 0))
+    bg_msk = np.logical_or(bg_msk, eigval[1] > 0)
+    if len(eigval) > 2:
+        bg_msk = np.logical_or(bg_msk, eigval[2] > 0)
 
     # set background vesselness to zero
     vesselness[bg_msk] = 0
